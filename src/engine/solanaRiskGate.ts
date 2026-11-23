@@ -4,6 +4,7 @@ import type {
   PythFeedSnapshot,
   SolanaRiskGateConfig,
   SolanaRiskGateDecision,
+  TradeDirection,
   VenueOrderbookSnapshot,
 } from './types';
 import { evaluatePythOracleGuard } from '../oracle/pythHermesGuard';
@@ -18,10 +19,10 @@ export const DEFAULT_SOLANA_RISK_CONFIG: SolanaRiskGateConfig = {
   maxLeverage: 5.0, // Max 5.0x effective leverage on Perps ($800 notional ceiling)
   maxOracleStalenessMs: 45_000, // 45s Pyth staleness ceiling
   maxPythConfBps: 30.0, // 30 bps (0.30%) max Pyth ±conf ratio
-  minDislocationEdgeBps: 35.0, // +35 bps min edge for Perps (+450 bps / +4.5c for binary PM)
-  maxSpreadBps: 35.0, // <= 35 bps spread for Perps (<= 400 bps / 4.0c for binary PM)
+  minDislocationEdgeBps: 35.0, // +35 bps min edge for Perps (+450 probability bps / +4.5c for binary PM)
+  maxSpreadBps: 35.0, // <= 35 bps spread for Perps (<= 400 probability bps / 4.0c for binary PM)
   minExecutableDepthUsdc: 25.0, // >= $25 USDC executable top-of-book depth
-  maxSlippageBps: 20.0, // <= 20 bps VWAP slippage for Perps (<= 150 bps / 1.5c for PM)
+  maxSlippageBps: 20.0, // <= 20 bps VWAP slippage for Perps (<= 150 probability bps / 1.5c for PM)
   maxAdverseWhaleFlowUsdc: 1000.0, // Pre-headline counter-whale toxicity limit
 };
 
@@ -33,26 +34,32 @@ function isPredictionVenue(book: VenueOrderbookSnapshot): boolean {
 }
 
 /**
- * Pure Fixed-Loss Position Sizer ("以损定仓"):
+ * Pure Fixed-Loss Position Sizer ("以损定仓") supporting `LONG`, `SHORT`, and `YES`:
  * - For Solana Perpetuals: `rawNotional = fixedRiskCapUsdc / (stopDistanceBps / 10_000)`,
- *   clamped by `maxCollateralUsdc * maxLeverage` and executable book depth within `limitPrice`.
+ *   clamped by `maxCollateralUsdc * maxLeverage` and executable book depth within `limitPrice`
+ *   (sweeping `asks` for `LONG` and `bids` for `SHORT`).
  * - For Binary Prediction Markets: `stopDistanceBps = 10_000` (100% binary resolution risk),
- *   so `finalSizedNotionalUsdc <= fixedRiskCapUsdc` ($10.00 USDC hard cap).
+ *   so `finalSizedNotionalUsdc <= fixedRiskCapUsdc` ($10.00 USDC hard cap), and slippage is
+ *   measured consistently in probability basis points (`1 cent = 100 bps`).
  */
 export function sizePositionByFixedLoss(
   requestedRiskUsdc: number,
   stopDistanceBps: number,
   book: VenueOrderbookSnapshot,
-  config: SolanaRiskGateConfig = DEFAULT_SOLANA_RISK_CONFIG
+  config: SolanaRiskGateConfig = DEFAULT_SOLANA_RISK_CONFIG,
+  direction: TradeDirection = 'LONG'
 ): PositionSizingBreakdown {
+  const isShort = direction === 'SHORT';
+  const refPrice = isShort ? book.bestBid : book.bestAsk;
+
   const validInputs =
     Number.isFinite(requestedRiskUsdc) &&
     requestedRiskUsdc > 0 &&
     Number.isFinite(stopDistanceBps) &&
     stopDistanceBps >= 25 &&
     stopDistanceBps <= 10_000 &&
-    Number.isFinite(book.bestAsk) &&
-    book.bestAsk > 0 &&
+    Number.isFinite(refPrice) &&
+    refPrice > 0 &&
     Number.isFinite(config.fixedRiskCapUsdc) &&
     config.fixedRiskCapUsdc > 0 &&
     Number.isFinite(config.maxCollateralUsdc) &&
@@ -84,11 +91,17 @@ export function sizePositionByFixedLoss(
     Math.min(requestedRiskUsdc, config.fixedRiskCapUsdc).toFixed(2)
   );
   const effectiveStopBps = isPm ? 10_000 : stopDistanceBps;
-  const maxSlipBps = isPm ? Math.max(config.maxSlippageBps, 150) : config.maxSlippageBps;
+  const maxSlipBps = isPm
+    ? Math.max(config.maxSlippageBps, 150)
+    : config.maxSlippageBps;
 
   const limitPrice = isPm
-    ? Number(Math.min(0.99, book.bestAsk + 0.015).toFixed(4))
-    : Number((book.bestAsk * (1 + maxSlipBps / 10_000)).toFixed(4));
+    ? isShort
+      ? Number(Math.max(0.01, book.bestBid - maxSlipBps / 10_000).toFixed(4))
+      : Number(Math.min(0.99, book.bestAsk + maxSlipBps / 10_000).toFixed(4))
+    : isShort
+      ? Number((book.bestBid * (1 - maxSlipBps / 10_000)).toFixed(4))
+      : Number((book.bestAsk * (1 + maxSlipBps / 10_000)).toFixed(4));
 
   const rawRiskSizedNotionalUsdc = Number(
     ((clampedRiskBudgetUsdc * 10_000) / effectiveStopBps).toFixed(2)
@@ -100,15 +113,24 @@ export function sizePositionByFixedLoss(
     Math.min(rawRiskSizedNotionalUsdc, leverageCeilingUsdc).toFixed(2)
   );
 
-  const executableDepthUsdc = computeExecutableDepthUsdc(book.asks, limitPrice);
+  const activeLevels = isShort ? book.bids : book.asks;
+  const executableDepthUsdc = computeExecutableDepthUsdc(
+    activeLevels,
+    limitPrice,
+    direction
+  );
   const depthCappedNotionalUsdc = Number(
     Math.min(leverageCappedNotionalUsdc, executableDepthUsdc).toFixed(2)
   );
 
   const vwap = simulateOrderbookVwapFill(
-    book.asks,
-    depthCappedNotionalUsdc > 0 ? depthCappedNotionalUsdc : leverageCappedNotionalUsdc,
-    limitPrice
+    activeLevels,
+    depthCappedNotionalUsdc > 0
+      ? depthCappedNotionalUsdc
+      : leverageCappedNotionalUsdc,
+    limitPrice,
+    direction,
+    isPm
   );
 
   const finalSizedNotionalUsdc =
@@ -140,7 +162,8 @@ export function sizePositionByFixedLoss(
 
 /**
  * Evaluates all 8 Fail-Closed Solana execution invariants before building or signing
- * any Devnet transaction. Never leaks `NaN` or `Infinity` across any numeric field.
+ * any Devnet transaction. Supports both `LONG`/`YES` and `SHORT` directions and never
+ * leaks `NaN` or `Infinity` across any numeric field.
  */
 export function evaluateSolanaRiskGate(
   impulse: ImpulseSignal,
@@ -150,6 +173,8 @@ export function evaluateSolanaRiskGate(
   config: SolanaRiskGateConfig = DEFAULT_SOLANA_RISK_CONFIG,
   nowMs = Date.now()
 ): SolanaRiskGateDecision {
+  const isShort = impulse.direction === 'SHORT';
+
   const configFinite =
     Number.isFinite(config.fixedRiskCapUsdc) &&
     config.fixedRiskCapUsdc > 0 &&
@@ -179,7 +204,7 @@ export function evaluateSolanaRiskGate(
     Number.isFinite(book.bestAsk) &&
     book.bestAsk > 0 &&
     Number.isFinite(book.bestBid) &&
-    book.bestBid >= 0 &&
+    (isShort ? book.bestBid > 0 : book.bestBid >= 0) &&
     Number.isFinite(book.spread) &&
     book.spread >= 0 &&
     Number.isFinite(book.adverseWhaleFlowUsdc);
@@ -190,9 +215,10 @@ export function evaluateSolanaRiskGate(
         requestedRiskUsdc,
         impulse.stopDistanceBps,
         book,
-        config
+        config,
+        impulse.direction
       )
-    : sizePositionByFixedLoss(-1, 0, book, config);
+    : sizePositionByFixedLoss(-1, 0, book, config, impulse.direction);
 
   const oracleGuard = evaluatePythOracleGuard(
     pythFeed,
@@ -200,24 +226,41 @@ export function evaluateSolanaRiskGate(
     configFinite ? config.maxPythConfBps : 30
   );
 
+  const activeBookSide = isShort ? book.bids : book.asks;
   const availableDepthUsdc =
     inputsFinite && sizing.limitPrice > 0
-      ? computeExecutableDepthUsdc(book.asks, sizing.limitPrice)
+      ? computeExecutableDepthUsdc(
+          activeBookSide,
+          sizing.limitPrice,
+          impulse.direction
+        )
       : 0;
 
   const spreadBps = inputsFinite
     ? isPm
       ? Number((book.spread * 10_000).toFixed(2))
-      : Number((((book.bestAsk - book.bestBid) / book.bestAsk) * 10_000).toFixed(2))
+      : Number(
+          (((book.bestAsk - book.bestBid) / book.bestAsk) * 10_000).toFixed(2)
+        )
     : 99_999;
 
   const edgeBps = inputsFinite
     ? isPm
-      ? Number(((impulse.fairValuePrice - book.bestAsk) * 10_000).toFixed(2))
+      ? Number(
+          (
+            (isShort
+              ? book.bestBid - impulse.fairValuePrice
+              : impulse.fairValuePrice - book.bestAsk) * 10_000
+          ).toFixed(2)
+        )
       : Number(
-          (((impulse.fairValuePrice - book.bestAsk) / book.bestAsk) * 10_000).toFixed(
-            2
-          )
+          (
+            ((isShort
+              ? book.bestBid - impulse.fairValuePrice
+              : impulse.fairValuePrice - book.bestAsk) /
+              (isShort ? book.bestBid : book.bestAsk)) *
+            10_000
+          ).toFixed(2)
         )
     : 0;
 
@@ -273,7 +316,10 @@ export function evaluateSolanaRiskGate(
     riskCapLocked && sizing.finalBaseQty > 0 && sizing.vwapFillPrice > 0
       ? Number(
           (
-            sizing.finalBaseQty * (impulse.fairValuePrice - sizing.vwapFillPrice)
+            sizing.finalBaseQty *
+            (isShort
+              ? sizing.vwapFillPrice - impulse.fairValuePrice
+              : impulse.fairValuePrice - sizing.vwapFillPrice)
           ).toFixed(2)
         )
       : 0;
@@ -407,10 +453,11 @@ export function evaluateSolanaRiskGate(
   }
 
   if (!depthOk) {
+    const sideLabel = isShort ? 'bid' : 'ask';
     return {
       passed: false,
       rejectionCode: 'INSUFFICIENT_DEPTH',
-      reason: `Fail-Closed Block: Executable ask depth $${availableDepthUsdc.toFixed(2)} < $${config.minExecutableDepthUsdc.toFixed(2)} floor`,
+      reason: `Fail-Closed Block: Executable ${sideLabel} depth $${availableDepthUsdc.toFixed(2)} < $${config.minExecutableDepthUsdc.toFixed(2)} floor`,
       edgeBps,
       spreadBps,
       pythConfBps: oracleGuard.confBps,

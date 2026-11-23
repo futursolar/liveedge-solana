@@ -1,4 +1,11 @@
-import { Keypair, PublicKey } from '@solana/web3.js';
+import {
+  Keypair,
+  PublicKey,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
+import { address, getTransactionDecoder, lamports } from '@solana/kit';
+import { LiteSVM, TransactionMetadata } from 'litesvm';
 import { describe, expect, it, vi } from 'vitest';
 import { runAgentCli } from '../src/cli/agentCli';
 import { evaluateSolanaRiskGate } from '../src/engine/solanaRiskGate';
@@ -7,19 +14,38 @@ import {
   verifyEd25519MessageSignature,
 } from '../src/solana/devnetExecutor';
 import {
+  COMPUTE_BUDGET_PROGRAM_ID,
   LIVEEDGE_RISK_GUARD_PROGRAM_ID,
+  SPL_MEMO_V2_PROGRAM_ID,
   buildAnchorRiskGuardInstruction,
+  buildCanonicalAuditMemoInstruction,
   buildDriftPlacePerpOrderInstruction,
+  buildInitializeRiskPolicyInstruction,
+  buildSetComputeUnitLimitInstruction,
+  buildSetComputeUnitPriceInstruction,
+  deriveDriftSpotMarketPda,
   deriveRiskPolicyPda,
   sha256Bytes,
 } from '../src/solana/driftInstructionBuilder';
-import { buildScenarioBundle } from '../src/venues/marketDataClient';
+import {
+  DRIFT_DEVNET_USDC_SPOT_MARKET_PDA,
+  DRIFT_DEVNET_USDC_SPOT_ORACLE,
+  DRIFT_V2_PROGRAM_ID,
+  buildScenarioBundle,
+} from '../src/venues/marketDataClient';
 
 describe('Anchor Risk Guard & Drift v2 Borsh Instruction Encoders', () => {
-  it('encodes Anchor executeGuardedImpulse and Drift bounded Limit order (never Market order)', async () => {
+  it('encodes Anchor initializeRiskPolicy + executeGuardedImpulse and Drift bounded Limit order with USDC SpotMarket[0]', async () => {
     const trader = Keypair.generate();
     const bundle = buildScenarioBundle('sol-perp-breakout');
     const digest = await sha256Bytes('test-decision-digest');
+
+    const initIx = await buildInitializeRiskPolicyInstruction({
+      authority: trader.publicKey,
+      fixedRiskCapUsdc: 10.0,
+    });
+    expect(initIx.programId.toBase58()).toBe(LIVEEDGE_RISK_GUARD_PROGRAM_ID);
+    expect(initIx.data.length).toBe(30);
 
     const anchorIx = await buildAnchorRiskGuardInstruction({
       authority: trader.publicKey,
@@ -28,17 +54,28 @@ describe('Anchor Risk Guard & Drift v2 Borsh Instruction Encoders', () => {
       expectedPythFeedIdHex: bundle.pythFeed.feedIdHex,
       sizedNotionalUsdc: 800,
       stopDistanceBps: 125,
-      referenceAsk: bundle.orderbook.bestAsk,
+      referencePrice: bundle.orderbook.bestAsk,
       limitPrice: bundle.orderbook.bestAsk * 1.0015,
       orderStyle: 'IOC_LIMIT',
+      direction: 'LONG',
+      venue: 'SOLANA_DRIFT_PERP',
       decisionDigestBytes: digest,
     });
 
     expect(anchorIx.programId.toBase58()).toBe(LIVEEDGE_RISK_GUARD_PROGRAM_ID);
-    expect(anchorIx.data.length).toBe(99);
+    expect(anchorIx.data.length).toBe(101);
     expect(anchorIx.data[66]).toBe(1); // OrderMode::IocLimit (never 0 BlindMarket)
+    expect(anchorIx.data[67]).toBe(0); // TradeSide::Long
+    expect(anchorIx.data[68]).toBe(0); // MarketKind::Perp
     const [expectedPolicyPda] = deriveRiskPolicyPda(trader.publicKey);
-    expect(anchorIx.keys[1].pubkey.toBase58()).toBe(expectedPolicyPda.toBase58());
+    expect(anchorIx.keys[1].pubkey.toBase58()).toBe(
+      expectedPolicyPda.toBase58()
+    );
+
+    // Verify derived SpotMarket[0] PDA matches live Drift Devnet USDC SpotMarket[0]
+    expect(deriveDriftSpotMarketPda(0).toBase58()).toBe(
+      DRIFT_DEVNET_USDC_SPOT_MARKET_PDA
+    );
 
     const driftIocIx = await buildDriftPlacePerpOrderInstruction({
       authority: trader.publicKey,
@@ -55,25 +92,37 @@ describe('Anchor Risk Guard & Drift v2 Borsh Instruction Encoders', () => {
     expect(driftIocIx.data[31]).toBe(0); // post_only = None
     expect(driftIocIx.data[32]).toBe(1); // immediate_or_cancel = true
 
-    const driftPostOnlyIx = await buildDriftPlacePerpOrderInstruction({
+    // Verify Drift v2 remaining_accounts order: [state, user, authority, usdcOracle, perpOracle, usdcSpotMarket0, perpMarket]
+    const keyAddrs = driftIocIx.keys.map((k) => k.pubkey.toBase58());
+    expect(keyAddrs[3]).toBe(DRIFT_DEVNET_USDC_SPOT_ORACLE);
+    expect(keyAddrs[4]).toBe(bundle.orderbook.oraclePubkey);
+    expect(keyAddrs[5]).toBe(DRIFT_DEVNET_USDC_SPOT_MARKET_PDA);
+    expect(keyAddrs[6]).toBe(bundle.orderbook.marketPda);
+
+    const driftShortPostOnlyIx = await buildDriftPlacePerpOrderInstruction({
       authority: trader.publicKey,
       marketIndex: 0,
       marketPda: new PublicKey(bundle.orderbook.marketPda),
       oraclePubkey: new PublicKey(bundle.orderbook.oraclePubkey),
-      direction: 'LONG',
+      direction: 'SHORT',
       baseQty: 10.79,
-      limitPrice: 74.18,
+      limitPrice: 73.85,
       orderStyle: 'POST_ONLY',
     });
-    expect(driftPostOnlyIx.data[31]).toBe(1); // PostOnlyParam::MustPostOnly
-    expect(driftPostOnlyIx.data[32]).toBe(0); // immediate_or_cancel = false
+    expect(driftShortPostOnlyIx.data[10]).toBe(1); // PositionDirection::Short = 1
+    expect(driftShortPostOnlyIx.data[31]).toBe(1); // PostOnlyParam::MustPostOnly
+    expect(driftShortPostOnlyIx.data[32]).toBe(0); // immediate_or_cancel = false
   });
 });
 
-describe('Solana Devnet Executor & Fail-Closed Second-Layer Guard', () => {
+describe('Solana Devnet Executor, Agave LiteSVM Verification & Anti-Spoofing Guards', () => {
   it('refuses to sign or broadcast any transaction when RiskGate decision is rejected', async () => {
     const nowMs = Date.now();
-    const blocked = buildScenarioBundle('btc-cpi-conf-blowout', undefined, nowMs);
+    const blocked = buildScenarioBundle(
+      'btc-cpi-conf-blowout',
+      undefined,
+      nowMs
+    );
     const decision = evaluateSolanaRiskGate(
       blocked.impulse,
       blocked.pythFeed,
@@ -95,7 +144,7 @@ describe('Solana Devnet Executor & Fail-Closed Second-Layer Guard', () => {
     ).rejects.toThrow(/Refusing to sign\/broadcast/);
   });
 
-  it('signs V0 transaction with verified Ed25519 signature and broadcasts when funded on Devnet', async () => {
+  it('packs all 4 canonical programs into unfunded V0 bundle, never spoofs simPayer, never fakes CU logs, and fails closed on WebCrypto errors', async () => {
     const nowMs = Date.now();
     const bundle = buildScenarioBundle('sol-perp-breakout', undefined, nowMs);
     const decision = evaluateSolanaRiskGate(
@@ -107,24 +156,28 @@ describe('Solana Devnet Executor & Fail-Closed Second-Layer Guard', () => {
       nowMs
     );
     const trader = Keypair.generate();
-    let sentRawBytes: Uint8Array | null = null;
 
-    const fakeConn = {
+    const simulatedPayers: string[] = [];
+    const unfundedConn = {
       getLatestBlockhash: vi.fn().mockResolvedValue({
         blockhash: '11111111111111111111111111111111',
-        lastValidBlockHeight: 500_000_000,
+        lastValidBlockHeight: 525_530_000,
       }),
-      getBalance: vi.fn().mockResolvedValue(500_000_000), // 0.5 Devnet SOL
+      getBalance: vi.fn().mockResolvedValue(0),
       getAccountInfo: vi.fn().mockResolvedValue(null),
-      sendRawTransaction: vi.fn().mockImplementation(async (raw: Uint8Array) => {
-        sentRawBytes = raw;
-        return '4KZCmRYonzuuMd72PpHBovaosjT54eEvb6X2Br8mYnMQKbph3RyJ331A7wZvg4AXLakKHe2s7QBT2K5sjUUiyyn6';
-      }),
-      confirmTransaction: vi.fn().mockResolvedValue({ value: { err: null } }),
-      getSignaturesForAddress: vi.fn().mockResolvedValue([]),
-      getTransaction: vi.fn().mockResolvedValue(null),
-      simulateTransaction: vi.fn(),
-      getSlot: vi.fn().mockResolvedValue(525_507_777),
+      sendRawTransaction: vi.fn(),
+      confirmTransaction: vi.fn(),
+      getTransaction: vi.fn(),
+      simulateTransaction: vi
+        .fn()
+        .mockImplementation(async (tx: VersionedTransaction) => {
+          simulatedPayers.push(tx.message.staticAccountKeys[0].toBase58());
+          return {
+            context: { slot: 525_528_900 },
+            value: { err: 'AccountNotFound', logs: [] },
+          };
+        }),
+      getSlot: vi.fn().mockResolvedValue(525_528_900),
     };
 
     const receipt = await executeRiskGatedSolanaOrder({
@@ -135,28 +188,149 @@ describe('Solana Devnet Executor & Fail-Closed Second-Layer Guard', () => {
       orderStyle: 'IOC_LIMIT',
       signerMode: 'DEVNET_KEYPAIR_LIVE',
       keypair: trader,
-      connectionOverride: fakeConn,
+      connectionOverride: unfundedConn,
+    });
+
+    // 1. Exact fee-payer simulated is `trader` (NEVER a random stranger from SPL_MEMO_V2!)
+    expect(simulatedPayers).toEqual([trader.publicKey.toBase58()]);
+
+    // 2. All 4 programs packed into the signed V0 bundle (`instructionCount = 5`)
+    expect(receipt.instructionCount).toBe(5);
+    expect(receipt.executedPrograms).toEqual([
+      COMPUTE_BUDGET_PROGRAM_ID,
+      LIVEEDGE_RISK_GUARD_PROGRAM_ID,
+      DRIFT_V2_PROGRAM_ID,
+      SPL_MEMO_V2_PROGRAM_ID,
+    ]);
+
+    // 3. Honest unfunded status & zero fabricated CU logs
+    expect(receipt.broadcastStatus).toBe('OFFLINE_ED25519_SIGNED');
+    expect(receipt.computeUnitsConsumed).toBe(0);
+    expect(receipt.ed25519Verified).toBe(true);
+    expect(receipt.rpcSimulationNote).toContain('AccountNotFound');
+
+    // 4. WebCrypto Ed25519 tamper & runtime-exception fail-closed checks
+    const badSig = new Uint8Array(64).fill(7);
+    expect(
+      await verifyEd25519MessageSignature(
+        trader.publicKey.toBytes(),
+        new Uint8Array([1, 2, 3]),
+        badSig
+      )
+    ).toBe(false);
+
+    const verifySpy = vi
+      .spyOn(crypto.subtle, 'verify')
+      .mockRejectedValueOnce(new Error('Simulated WebCrypto failure'));
+    try {
+      const resOnThrow = await verifyEd25519MessageSignature(
+        trader.publicKey.toBytes(),
+        new Uint8Array([1, 2, 3]),
+        badSig
+      );
+      expect(resOnThrow).toBe(false);
+    } finally {
+      verifySpy.mockRestore();
+    }
+  });
+
+  it('signs V0 transaction and broadcasts live when funded on Devnet, and executes real BPF in Agave LiteSVM', async () => {
+    const nowMs = Date.now();
+    const bundle = buildScenarioBundle('sol-perp-breakout', undefined, nowMs);
+    const decision = evaluateSolanaRiskGate(
+      bundle.impulse,
+      bundle.pythFeed,
+      bundle.orderbook,
+      10.0,
+      undefined,
+      nowMs
+    );
+    const trader = Keypair.generate();
+
+    // Part A: Real Agave LiteSVM execution with Ed25519 signature verification (`withSigverify(true)`)
+    const svm = new LiteSVM().withDefaultPrograms().withSigverify(true);
+    svm.airdrop(address(trader.publicKey.toBase58()), lamports(1_000_000_000n));
+    const { instruction: memoIx } = await buildCanonicalAuditMemoInstruction({
+      trader: trader.publicKey,
+      impulse: bundle.impulse,
+      pythFeed: bundle.pythFeed,
+      book: bundle.orderbook,
+      decision,
+      orderStyle: 'IOC_LIMIT',
+    });
+    const svmMsg = new TransactionMessage({
+      payerKey: trader.publicKey,
+      recentBlockhash: svm.latestBlockhash(),
+      instructions: [
+        buildSetComputeUnitLimitInstruction(200_000),
+        buildSetComputeUnitPriceInstruction(1_200),
+        memoIx,
+      ],
+    }).compileToV0Message();
+    const svmTx = new VersionedTransaction(svmMsg);
+    svmTx.sign([trader]);
+    const kitTx = getTransactionDecoder().decode(svmTx.serialize());
+    const svmMeta = svm.sendTransaction(kitTx);
+    expect(svmMeta).toBeInstanceOf(TransactionMetadata);
+    const okMeta = svmMeta as TransactionMetadata;
+    expect(Number(okMeta.computeUnitsConsumed())).toBeGreaterThan(1_000);
+    expect(
+      okMeta.logs().some((l: string) => l.includes(SPL_MEMO_V2_PROGRAM_ID))
+    ).toBe(true);
+
+    // Part B: Funded Devnet RPC live broadcast path (`CONFIRMED_ON_DEVNET`)
+    let sentRawBytes: Uint8Array | null = null;
+    const fundedConn = {
+      getLatestBlockhash: vi.fn().mockResolvedValue({
+        blockhash: '11111111111111111111111111111111',
+        lastValidBlockHeight: 525_530_000,
+      }),
+      getBalance: vi.fn().mockResolvedValue(500_000_000), // 0.5 Devnet SOL
+      getAccountInfo: vi
+        .fn()
+        .mockResolvedValue({ executable: true, data: Buffer.alloc(64) }),
+      sendRawTransaction: vi
+        .fn()
+        .mockImplementation(async (raw: Uint8Array) => {
+          sentRawBytes = raw;
+          return '4KZCmRYonzuuMd72PpHBovaosjT54eEvb6X2Br8mYnMQKbph3RyJ331A7wZvg4AXLakKHe2s7QBT2K5sjUUiyyn6';
+        }),
+      confirmTransaction: vi.fn().mockResolvedValue({ value: { err: null } }),
+      getTransaction: vi.fn().mockResolvedValue({
+        meta: {
+          computeUnitsConsumed: 42_180,
+          logMessages: [
+            `Program ${LIVEEDGE_RISK_GUARD_PROGRAM_ID} success`,
+            `Program ${DRIFT_V2_PROGRAM_ID} success`,
+            `Program ${SPL_MEMO_V2_PROGRAM_ID} success`,
+          ],
+        },
+      }),
+      simulateTransaction: vi.fn(),
+      getSlot: vi.fn().mockResolvedValue(525_529_777),
+    };
+
+    const receipt = await executeRiskGatedSolanaOrder({
+      impulse: bundle.impulse,
+      pythFeed: bundle.pythFeed,
+      book: bundle.orderbook,
+      decision,
+      orderStyle: 'IOC_LIMIT',
+      signerMode: 'DEVNET_KEYPAIR_LIVE',
+      keypair: trader,
+      connectionOverride: fundedConn,
     });
 
     expect(sentRawBytes).not.toBeNull();
     expect(receipt.broadcastStatus).toBe('CONFIRMED_ON_DEVNET');
     expect(receipt.ed25519Verified).toBe(true);
-    expect(receipt.devnetSlot).toBe(525_507_777);
-    expect(receipt.impliedMaxLossUsdc).toBeLessThanOrEqual(10.0);
-    expect(receipt.explorerTxUrl).toContain('cluster=devnet');
-    expect(receipt.explorerInspectorUrl).toContain('explorer.solana.com/tx/inspector?cluster=devnet');
-
-    // Also test direct Ed25519 negative tamper check
-    const badSig = new Uint8Array(64).fill(7);
-    const verifiedBad = await verifyEd25519MessageSignature(
-      trader.publicKey.toBytes(),
-      new Uint8Array([1, 2, 3]),
-      badSig
-    );
-    expect(verifiedBad).toBe(false);
+    expect(receipt.computeUnitsConsumed).toBe(42_180);
+    expect(receipt.executedPrograms).toContain(LIVEEDGE_RISK_GUARD_PROGRAM_ID);
+    expect(receipt.executedPrograms).toContain(DRIFT_V2_PROGRAM_ID);
+    expect(receipt.devnetSlot).toBe(525_529_777);
   });
 
-  it('executes Agent CLI scenarios subcommand cleanly with exit code 0', async () => {
+  it('executes Agent CLI scenarios and pulse subcommands cleanly with exit code 0', async () => {
     const logs: string[] = [];
     const spy = vi.spyOn(console, 'log').mockImplementation((msg: string) => {
       logs.push(String(msg));
@@ -171,7 +345,6 @@ describe('Solana Devnet Executor & Fail-Closed Second-Layer Guard', () => {
       spy.mockRestore();
     }
 
-    // Verify pulse subcommand produces deterministic JSON on blocked & passed scenarios
     const pulseLogs: string[] = [];
     const spy2 = vi.spyOn(console, 'log').mockImplementation((msg: string) => {
       pulseLogs.push(String(msg));

@@ -21,6 +21,8 @@ export interface PythFeedSnapshot {
   spotReferenceUsd: number;
   spotDislocationBps: number;
   source: PythSourceMode;
+  cluster?: 'devnet' | 'mainnet-beta';
+  verificationLevel?: 'FULL' | 'PARTIAL';
 }
 
 export type OracleRejectionCode =
@@ -111,14 +113,14 @@ export interface ImpulseSignal {
 
 export interface SolanaRiskGateConfig {
   fixedRiskCapUsdc: number; // Default: 10.00 USDC hard max loss per impulse
-  maxCollateralUsdc: number; // Default: 200.00 USDC margin allocation cap
+  maxCollateralUsdc: number; // Default: 160.00 USDC margin allocation cap
   maxLeverage: number; // Default: 5.0x ceiling for Perps
   maxOracleStalenessMs: number; // Default: 45_000 ms (45s)
   maxPythConfBps: number; // Default: 30 bps (0.30%)
   minDislocationEdgeBps: number; // Default: 35 bps (0.35%) for Perps / 450 bps (4.5c) for PM
   maxSpreadBps: number; // Default: 35 bps for Perps / 400 bps (4.0c) for PM
   minExecutableDepthUsdc: number; // Default: 25.00 USDC
-  maxSlippageBps: number; // Default: 20 bps for Perps / 150 bps for PM
+  maxSlippageBps: number; // Default: 20 bps for Perps / 150 probability bps (1.5c) for PM
   maxAdverseWhaleFlowUsdc: number; // Default: 1000.00 USDC
 }
 
@@ -178,7 +180,14 @@ export interface SolanaRiskGateDecision {
 export type SolanaSignerMode =
   | 'DEVNET_WALLET_STANDARD'
   | 'DEVNET_KEYPAIR_LIVE'
-  | 'DEVNET_BPF_SIMULATION';
+  | 'DEVNET_BPF_SIMULATION'
+  | 'OFFLINE_ED25519_SIGNED';
+
+export type SolanaBroadcastStatus =
+  | 'CONFIRMED_ON_DEVNET'
+  | 'SIMULATED_DEVNET_BPF'
+  | 'DEVNET_SVM_VERIFIED'
+  | 'OFFLINE_ED25519_SIGNED';
 
 export interface LatencyWaterfallMs {
   detectToOracleMs: number;
@@ -209,12 +218,16 @@ export interface SolanaExecutionReceipt {
   pythConfBps: number;
   pythAccount: string;
   targetMarketPda: string;
+  driftOraclePubkey: string;
   riskGuardProgramId: string;
   driftProgramId: string;
+  executedPrograms: string[];
+  instructionCount: number;
   decisionDigestHex: string;
   txSignature: string;
   messageBase64: string;
-  broadcastStatus: 'CONFIRMED_ON_DEVNET' | 'SIMULATED_DEVNET_BPF';
+  broadcastStatus: SolanaBroadcastStatus;
+  rpcSimulationNote?: string;
   devnetSlot: number;
   computeUnitsConsumed: number;
   priorityFeeMicroLamports: number;

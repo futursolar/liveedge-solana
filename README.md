@@ -27,8 +27,8 @@ Impulse dislocations between spot orderflow and on-chain Perps / Prediction Mark
 
 - On high-latency L1s (`12s` block times, `$3–$25` gas) or fragmented off-chain sequencers, checking live oracle confidence intervals and enforcing an escrow risk policy either arrives after the repricing window closes or costs more in gas than a `$10.00 USDC` capped risk budget.
 - On **Solana** (`~400ms` slots, sub-cent priority fees, single-slot atomic multi-instruction composability):
-  - **Sub-Second Oracle Truth**: LiveEdge reads **Pyth Solana Receiver `PriceUpdateV2` (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)** binary accounts directly from Solana RPC alongside **Pyth Hermes v2 (`@pythnetwork/hermes-client`)** and cross-checks live spot L2 books (`SOL/USD`, `BTC/USD`, `ETH/USD`).
-  - **Single-Transaction Atomic Guard**: Priority fee allocation (`ComputeBudget`), on-chain Pyth freshness & confidence verification (`liveedge_risk_guard` Anchor program), bounded `IOC_LIMIT` / `POST_ONLY` venue execution (**Drift Protocol v2** `dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`), and canonical SHA-256 audit attestation (`SPL Memo v2`) compose into **one atomic Solana V0 `VersionedTransaction`**. If any safety invariant fails at the execution slot, the entire transaction reverts cleanly.
+  - **Sub-Second Devnet & Mainnet Oracle Truth**: LiveEdge reads **Pyth Solana Receiver `PriceUpdateV2` (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)** binary accounts (`VerificationLevel::Full`) directly from Solana RPC alongside **Pyth Hermes v2 (`@pythnetwork/hermes-client`)** and live **Drift Protocol v2 (`dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`)** `PerpMarket` vAMM reserves (`SOL-PERP`, `BTC-PERP`, `ETH-PERP`, and Devnet BET Prediction `#26`).
+  - **4-Program Single-Transaction Atomic V0 Bundle**: Priority fee allocation (`ComputeBudget`), on-chain Pyth `VerificationLevel::Full` + `raw_price`-anchored slippage & fixed-loss guard (`liveedge_risk_guard` Anchor program), bounded `IOC_LIMIT` / `POST_ONLY` venue execution (`Drift v2::place_perp_order` with canonical `OracleMap` + `SpotMarket[0]` USDC margin + `PerpMarketMap` remaining accounts), and canonical SHA-256 audit attestation (`SPL Memo v2`) compose into **one atomic Solana V0 `VersionedTransaction`**.
 
 ---
 
@@ -36,17 +36,17 @@ Impulse dislocations between spot orderflow and on-chain Perps / Prediction Mark
 
 ```mermaid
 flowchart LR
-    subgraph Feeds["Sub-Second Telemetry Layer"]
-        P1["Pyth Hermes v2 SDK\n& Solana PriceUpdateV2\n(rec5EKMG...tFJ)"]
+    subgraph Feeds["Sub-Second Solana Devnet Telemetry"]
+        P1["Pyth Hermes v2 SDK\n& Solana PriceUpdateV2\n(rec5EKMG...tFJ · Full Quorum)"]
         S1["Spot L2 Reference\n(SOL / BTC / ETH)"]
-        D1["Drift v2 PerpMarket & BET\nOn-Chain vAMM + CLOB\n(dRiftyHA...3UH)"]
+        D1["Drift v2 PerpMarket & BET\nvAMM + USDC SpotMarket[0]\n(dRiftyHA...3UH)"]
     end
 
-    subgraph Engine["8-Gate Fail-Closed Risk & Sizer Engine"]
+    subgraph Engine["8-Gate Fail-Closed Sizer (LONG / SHORT / YES)"]
         G1["1. Fixed Max-Loss Cap ($10 USDC)\nNotional = RiskCap / StopDistance"]
         G2["2. Pyth Staleness <= 45s\n& ±Conf Ratio <= 30 bps"]
         G3["3. Whale Toxicity < $1,000\n& Cui Bono Sentinel"]
-        G4["4. Spread, Ask Depth >= $25\n& Multi-Rung VWAP Slippage"]
+        G4["4. Spread, Side Depth >= $25\n& Multi-Rung VWAP Slippage"]
     end
 
     subgraph Surfaces["Operator & Autonomous Surfaces"]
@@ -55,8 +55,8 @@ flowchart LR
         U3["Optional Even G2 Smart-Glasses\n576x288 Waveguide HUD"]
     end
 
-    subgraph Solana["Solana 400ms Atomic V0 Transaction"]
-        T1["ComputeBudget Priority Lane\n+ Anchor LiveEdgeRiskGuard\n+ Bounded IOC_LIMIT / POST_ONLY\n+ SPL Memo v2 Audit Digest"]
+    subgraph Solana["Solana 400ms 4-Program Atomic V0 Bundle"]
+        T1["1. ComputeBudget Priority Lane\n2. Anchor LiveEdgeRiskGuard\n3. Drift v2 Bounded Limit Order\n4. SPL Memo v2 Audit Digest"]
     end
 
     P1 --> G2
@@ -74,36 +74,38 @@ flowchart LR
 
 | Module | Source Path | Key Capability |
 | :--- | :--- | :--- |
-| **① Pyth Confidence & Staleness Guard** | [`src/oracle/pythHermesGuard.ts`](./src/oracle/pythHermesGuard.ts) | Integrates `@pythnetwork/hermes-client` + native binary `DataView` decoder for Solana `PriceUpdateV2` (`7UVimffxr...` SOL, `4cSM2e6r...` BTC, `42amVS4K...` ETH); intercepts `ORACLE_STALE_FRAME` and `ORACLE_CONFIDENCE_TOO_WIDE` blowouts. |
-| **② Atomic On-Chain Risk Guard & Devnet Executor** | [`programs/liveedge_risk_guard/src/lib.rs`](./programs/liveedge_risk_guard/src/lib.rs), [`src/engine/solanaRiskGate.ts`](./src/engine/solanaRiskGate.ts), [`src/solana/devnetExecutor.ts`](./src/solana/devnetExecutor.ts) | Anchor Rust program forbidding `BlindMarket` orders on-chain + TypeScript Fixed-Loss Sizer (`Max Loss ÷ Stop %`) + Drift v2 `placePerpOrder` Borsh encoder + Ed25519 V0 `VersionedTransaction` execution & Solana Devnet BPF VM verification. |
+| **① Pyth Confidence, Staleness & Quorum Guard** | [`src/oracle/pythHermesGuard.ts`](./src/oracle/pythHermesGuard.ts) | Integrates `@pythnetwork/hermes-client` + native binary `DataView` decoder for Solana Devnet `PriceUpdateV2` (`7UVimffxr...` SOL, `4cSM2e6r...` BTC, `42amVS4K...` ETH); enforces `VerificationLevel::Full` and blocks `ORACLE_STALE_FRAME` and `ORACLE_CONFIDENCE_TOO_WIDE` blowouts. |
+| **② Atomic On-Chain Risk Guard & Devnet Executor** | [`programs/liveedge_risk_guard/src/lib.rs`](./programs/liveedge_risk_guard/src/lib.rs), [`src/engine/solanaRiskGate.ts`](./src/engine/solanaRiskGate.ts), [`src/solana/devnetExecutor.ts`](./src/solana/devnetExecutor.ts) | Cargo-tested Anchor `0.30.1` Rust program (`idl-build` verified) anchoring slippage directly to Pyth `raw_price`, verifying `DRIFT_V2_PROGRAM_ID` market ownership & forbidding `BlindMarket` orders + TypeScript `LONG`/`SHORT`/`YES` Fixed-Loss Sizer + 4-program V0 transaction builder & Agave `LiteSVM` (`sigVerify: true`) verifier. |
 | **③ Quant Web Terminal + Agent CLI + G2 HUD** | [`src/ui/app.ts`](./src/ui/app.ts), [`src/cli/agentCli.ts`](./src/cli/agentCli.ts), [`src/hud/g2CompanionController.ts`](./src/hud/g2CompanionController.ts) | Real-time 3-column execution terminal, JSON-native CLI for AI trading agents, and optional `576×288` Even Realities G2 optical waveguide HUD for hands-free temple double-tap execution. |
 
 ---
 
-## 5. Verifiable Solana Devnet Evidence
+## 5. Verifiable Solana Devnet & Agave LiteSVM Evidence
 
-Full machine-verifiable telemetry and signed V0 execution receipts are stored in [`docs/DEVNET_EVIDENCE.json`](./docs/DEVNET_EVIDENCE.json):
+Full machine-verifiable Devnet telemetry, 4-program signed V0 bundles, and Agave `LiteSVM` BPF execution proofs are stored in [`docs/DEVNET_EVIDENCE.json`](./docs/DEVNET_EVIDENCE.json) (observed at Solana Devnet Slot `525536199`):
 
 - **Isolated Devnet-Only Demo Signer (Zero Mainnet Funds)**: `4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2`
 - **Pyth Solana Receiver Program**: [`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`](https://explorer.solana.com/address/rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ?cluster=devnet)
-- **Pyth SOL/USD `PriceUpdateV2` Account**: [`7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE`](https://explorer.solana.com/address/7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE?cluster=devnet)
-- **Drift v2 Devnet `SOL-PERP` Market PDA**: [`8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W`](https://explorer.solana.com/address/8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W?cluster=devnet)
+- **Pyth Devnet `SOL/USD` `PriceUpdateV2` Account**: [`7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE`](https://explorer.solana.com/address/7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE?cluster=devnet) (`VerificationLevel::Full`, Devnet Slot `525534599`)
+- **Drift v2 Devnet `SOL-PERP` Market PDA & Oracle**: [`8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W`](https://explorer.solana.com/address/8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W?cluster=devnet) · Oracle [`3m6i4RFWEDw2Ft4tFHPJtYgmpPe21k56M3FHeWYrgGBz`](https://explorer.solana.com/address/3m6i4RFWEDw2Ft4tFHPJtYgmpPe21k56M3FHeWYrgGBz?cluster=devnet) · USDC `SpotMarket[0]` [`6gMq3mRCKf8aP3ttTyYhuijVZ2LGi14oDsBbkgubfLB3`](https://explorer.solana.com/address/6gMq3mRCKf8aP3ttTyYhuijVZ2LGi14oDsBbkgubfLB3?cluster=devnet)
 - **Drift v2 Devnet `SOL-80-DEC-BET` Prediction PDA**: [`7rUSt1PXXn2Pp4ZNDcZqZGEgKSGpxqbRyb2W6rG1Dtt6`](https://explorer.solana.com/address/7rUSt1PXXn2Pp4ZNDcZqZGEgKSGpxqbRyb2W6rG1Dtt6?cluster=devnet)
-- **Signed V0 Receipt #1 (`SOL-PERP` `IOC_LIMIT`, `$800` Notional / `$10` Max Loss, `149,480 CU`, Devnet Slot `525510464`)**:
-  - Ed25519 Signature: `4rowAGfnzuDN732tHFXhV5svfN5fsSSiZaptDJ8oLAxyeU8jrxTRiwAQKTmGnQZWRqBx3cz2WMMgnqDcE8wGHCY3`
-  - [Inspect & Simulate V0 Message on Official Solana Explorer (Devnet)](https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%224rowAGfnzuDN732tHFXhV5svfN5fsSSiZaptDJ8oLAxyeU8jrxTRiwAQKTmGnQZWRqBx3cz2WMMgnqDcE8wGHCY3%22%5D&message=gAEAAgMzstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSQMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAABUpTWpkpIQZNJOhxYNo4fHw1td28kruB5B%2BoQEEFRI3BtGOTPJLL59T%2B9Xi3nTtBQRg56RD1hxZNNs67cBhUJgMBAAUCAHECAAEACQOwBAAAAAAAAAIBAP0CeyJ2IjoibGl2ZWVkZ2Utc29sYW5hL3YxIiwibWFya2V0IjoiU09MLVBFUlAiLCJ2ZW51ZSI6IlNPTEFOQV9EUklGVF9QRVJQIiwiZGlyIjoiTE9ORyIsInN0eWxlIjoiSU9DX0xJTUlUIiwicmlza0NhcFVzZGMiOjEwLCJzdG9wQnBzIjoxMjUsIm5vdGlvbmFsVXNkYyI6ODAwLCJxdHkiOjEwLjg3NDQsImxpbWl0UHJpY2UiOjczLjcwNzEsInB5dGhQcmljZSI6NzMuNDk1LCJweXRoQ29uZkJwcyI6Mi44LCJweXRoQWNjIjoiN1VWaW1mZnhyOW93MXVYWXhzcjRMSEFjVjU4bUx6aG13YWVLdkoxcGpMaUUiLCJtYXJrZXRQZGEiOiI4VUpneGFpUXg1blRyZERncGg1RmlhaE1temR1dUxUTGY1V21zUGVnWUE2VyIsImRpZ2VzdCI6ImUzZTI3M2RhNTcwOGIyYTQyNDIwNTFlYiJ9AA%3D%3D)
-- **Signed V0 Receipt #2 (`SOL-80-DEC-BET` `POST_ONLY`, `$10` Binary Outcome Cap, `151,541 CU`, Devnet Slot `525510465`)**:
-  - Ed25519 Signature: `Q4k5FyxmzJVGPMyVfqQ3tfmriYtZWiBY7sBrywvQqUbN3Djf8yr64uXk592xdez1CcNjWKTdJubXKWPgGHvfoER`
-  - [Inspect & Simulate V0 Message on Official Solana Explorer (Devnet)](https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%22Q4k5FyxmzJVGPMyVfqQ3tfmriYtZWiBY7sBrywvQqUbN3Djf8yr64uXk592xdez1CcNjWKTdJubXKWPgGHvfoER%22%5D&message=gAEAAgMzstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSQMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAABUpTWpkpIQZNJOhxYNo4fHw1td28kruB5B%2BoQEEFRI1v6vqSCbzmqoUuQ7qX%2FW7MkoEiPWWGRP4axxWTKc%2FhIQMBAAUCAHECAAEACQOwBAAAAAAAAAIBAIMDeyJ2IjoibGl2ZWVkZ2Utc29sYW5hL3YxIiwibWFya2V0IjoiU09MLTgwLURFQy1CRVQiLCJ2ZW51ZSI6IlNPTEFOQV9EUklGVF9CRVRfUE0iLCJkaXIiOiJZRVMiLCJzdHlsZSI6IlBPU1RfT05MWSIsInJpc2tDYXBVc2RjIjoxMCwic3RvcEJwcyI6MTAwMDAsIm5vdGlvbmFsVXNkYyI6MTAsInF0eSI6MTguNTE4NSwibGltaXRQcmljZSI6MC41NTUsInB5dGhQcmljZSI6NzMuNDk1LCJweXRoQ29uZkJwcyI6Mi43LCJweXRoQWNjIjoiN1VWaW1mZnhyOW93MXVYWXhzcjRMSEFjVjU4bUx6aG13YWVLdkoxcGpMaUUiLCJtYXJrZXRQZGEiOiI3clVTdDFQWFhuMlBwNFpORGNacVpHRWdLU0dweHFiUnliMlc2ckcxRHR0NiIsImRpZ2VzdCI6ImQxNzAxZDI1OTU0NmNiNjJkNzUzZmNmYiJ9AA%3D%3D)
+- **4-Program Atomic V0 Bundle #1 (`SOL-PERP` `LONG` `IOC_LIMIT`, `$800` Notional / `$10` Max Loss, `5` Instructions across `ComputeBudget` + `LiveEdgeRiskGuard` + `Drift v2` + `SPL Memo v2`)**:
+  - Ed25519 Signature: `3og2913Ekd3WJZzrpuBMRoSFi7oHYuxzTYTToSUGvUsJHWXQ6DhpWmrXnaE9LQ3YCE1QK6A1Ge2DpC132dm2n3jY`
+  - [Inspect Decoded 4-Program V0 Bundle & Verify Ed25519 Signature on Solana Explorer (Devnet)](https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%223og2913Ekd3WJZzrpuBMRoSFi7oHYuxzTYTToSUGvUsJHWXQ6DhpWmrXnaE9LQ3YCE1QK6A1Ge2DpC132dm2n3jY%22%5D&message=gAEACQ0zstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa%2FjoZObwB9xBeu8gamlEHq3LaZuMqqSvkDUq1wkM%2B%2BqfgfpGvKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAAYNqmkUl%2FM95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt%2F1dayQwlU276eyWDJinopP%2BITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1%2BFwLJA3uipzgdn7nObfFdD8VNdLtzEZ%2BK8S8ZDA4VvikDYiceTDtpx7UpBfc%2Foj%2BuGEGwhrIUjzR4ifH%2BlS%2FhVF%2BjDqO8PzwpZtqLbD3%2B%2BNOrfaV8oCMqVOSgJk%2F%2Fw8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjaCPIf8fDPd3BoQ5lxJBoQ6u1S4LInD1WzMMCvAynko1BQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW0ACK8vAAAAAH0AYKNcBAAAAABA314EAAAAAAEAAHLPVtwp92I%2BRhFdACc6D0SCYIOqBlQqVp2XttjPVf%2FoBwcIAwAJCgsCKEWhXcp4fky5AQEAAYDFhosCAAAAQN9eBAAAAAAAAAAAAQAAAAAAAAAMAQC7A3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC1QRVJQIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfUEVSUCIsImRpciI6IkxPTkciLCJzdHlsZSI6IklPQ19MSU1JVCIsInJpc2tDYXBVc2RjIjoxMCwic3RvcEJwcyI6MTI1LCJub3Rpb25hbFVzZGMiOjgwMCwicXR5IjoxMC45MzA4LCJsaW1pdFByaWNlIjo3My4zMjY0LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjgsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjhVSmd4YWlReDVuVHJkRGdwaDVGaWFoTW16ZHV1TFRMZjVXbXNQZWdZQTZXIiwiZHJpZnRPcmFjbGUiOiIzbTZpNFJGV0VEdzJGdDR0RkhQSnRZZ21wUGUyMWs1Nk0zRkhlV1lyZ0dCeiIsImRpZ2VzdCI6IjcyY2Y1NmRjMjlmNzYyM2U0NjExNWQwMCJ9AA%3D%3D)
+  - Agave `LiteSVM` (`sigVerify: true`) Audit Execution Proof: `3tWhCetbm253EipMNzuNDbEk4TvuZYHdPQSUVoJmwUxrUeiuiW9V1jxxEUFgcM6iwttPxjGertHmDxKVQxz7i9Uc` (`1,169 CU`, `SPL Memo v2` success)
+- **4-Program Atomic V0 Bundle #2 (`SOL-80-DEC-BET` `YES` `POST_ONLY`, `$10` Binary Outcome Cap, `5` Instructions)**:
+  - Ed25519 Signature: `3TWYbkVWSdDGNEAggxWYyRP8YitwLj9hapgNkecwgpNnYEsoGD8bVMe89RkEun1e38fTeuRBkx1dNdatUTBjsS94`
+  - [Inspect Decoded 4-Program V0 Bundle & Verify Ed25519 Signature on Solana Explorer (Devnet)](https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%223TWYbkVWSdDGNEAggxWYyRP8YitwLj9hapgNkecwgpNnYEsoGD8bVMe89RkEun1e38fTeuRBkx1dNdatUTBjsS94%22%5D&message=gAEACQ0zstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa%2FjoZOZdKdXhJhPNbUGAfRpYHuq7PgFK%2Fb74smnwaEJOYvrb%2FKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAAYNqmkUl%2FM95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt%2F1dayQwlU276eyWDJinopP%2BITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1%2BFwLJA3uipzgdn7nObfFdD8VNdLtzEZ%2BK8S8ZDA4VviSBJ6vhKXcltfwowKDc4P12md85m3szMmZT2G5mXgDnVF%2BjDqO8PzwpZtqLbD3%2B%2BNOrfaV8oCMqVOSgJk%2F%2Fw8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjTs1iViULH1YdYWThgVj%2BQ8hzBV%2FcH7SisuhuXkrD4tdBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW2AlpgAAAAAABAnYD0IAAAAAAD4dwgAAAAAAAIAAfteuqcksGfnvZhxktuqvqse2XGMFvLRBkMektZMzjIFBwcIAwAJCgsCKEWhXcp4fky5AQEAAaDiyU8EAAAA%2BHcIAAAAAAAaAAABAAAAAAAAAAAMAQDBA3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC04MC1ERUMtQkVUIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfQkVUX1BNIiwiZGlyIjoiWUVTIiwic3R5bGUiOiJQT1NUX09OTFkiLCJyaXNrQ2FwVXNkYyI6MTAsInN0b3BCcHMiOjEwMDAwLCJub3Rpb25hbFVzZGMiOjEwLCJxdHkiOjE4LjUxODUsImxpbWl0UHJpY2UiOjAuNTU1LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjcsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjdyVVN0MVBYWG4yUHA0Wk5EY1pxWkdFZ0tTR3B4cWJSeWIyVzZyRzFEdHQ2IiwiZHJpZnRPcmFjbGUiOiIzVFZ1TG1FR0JSZlZncm1GUnRZVGhlY3pYYWFvUkJ3Y0h3MXlpYlpIU2VOQSIsImRpZ2VzdCI6ImZiNWViYWE3MjRiMDY3ZTdiZDk4NzE5MiJ9AA%3D%3D)
+  - Agave `LiteSVM` (`sigVerify: true`) Audit Execution Proof: `9Bu23oxR2pGX9uhaGj6DYh3Z1rYhCw1Nyvb5R4dsZTUEEzoX4ixGBviLFa3nGf7TFMjBsaaaBUkQsaWJWSHAix8` (`1,175 CU`, `SPL Memo v2` success)
 
-> **Live L1 Broadcast Note**: Connecting any funded Devnet browser wallet (`Phantom` / `Solflare` / `Backpack`) in the Web UI — or setting `LIVEEDGE_DEVNET_KEYPAIR_PATH` to a funded Devnet keypair and running `npm run devnet:broadcast` — automatically upgrades execution from `SIMULATED_DEVNET_BPF` to `CONFIRMED_ON_DEVNET` via `sendRawTransaction` on `https://api.devnet.solana.com`.
+> **Public Devnet Faucet & Live L1 Broadcast Note**: Solana's programmatic `requestAirdrop` RPC endpoint is closed (`HTTP 410`) and `faucet.solana.com` requires a human Cloudflare Turnstile check, so the isolated demo wallet `4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2` holds `0 Devnet SOL` by default. Opening the Solana Explorer Inspector links above verifies the Ed25519 signature (`Valid`) and decodes all 5 instructions offline; clicking Explorer's public L1 *Simulate* button before funding `4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2` will return `InvalidAccountForFee` (`0 SOL` fee payer). Connecting any funded Devnet browser wallet (`Phantom` / `Solflare`) or funding `1 Devnet SOL` via `faucet.solana.com` and running `npm run devnet:broadcast` automatically broadcasts live (`CONFIRMED_ON_DEVNET`).
 
 ---
 
 ## 6. Quick Start & One-Command Reproduction
 
 ### Prerequisites
-- Node.js `>= 20` and npm `>= 10` (zero paid API keys required; reads Solana RPC `PriceUpdateV2` natively, with optional `PYTH_API_KEY` Bearer support for Pyth Hermes v2).
+- Node.js `>= 20`, npm `>= 10`, and Rust `cargo` (`>= 1.80` for Anchor on-chain guard verification; zero paid API keys required).
 
 ### Install & Launch Web Terminal
 ```bash
@@ -115,7 +117,7 @@ npm run dev
 
 ### Run Autonomous Agent CLI
 ```bash
-# Inspect live Pyth SOL/BTC/ETH feeds & confidence intervals
+# Inspect live Devnet Pyth SOL/BTC/ETH PriceUpdateV2 feeds & Drift v2 PerpMarket vAMM state
 npm run cli -- status
 
 # Evaluate all 6 impulse & trap scenarios across Perps and Prediction Markets
@@ -125,7 +127,7 @@ npm run cli -- scenarios
 npm run cli -- pulse --scenario sol-perp-breakout --risk-cap 10 --style IOC_LIMIT --json
 ```
 
-### Run Full Verification Gate (TypeScript + ESLint + Vitest + Desensitization + Headless E2E)
+### Run Full Verification Gate (Rust/Anchor + TypeScript + ESLint + Vitest + LiteSVM + Desensitization + Headless E2E)
 ```bash
 npm run check:all
 ```

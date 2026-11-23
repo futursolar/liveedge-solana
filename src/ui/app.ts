@@ -1,6 +1,7 @@
 import type {
   HudCompanionSnapshot,
   OrderExecutionStyle,
+  OrderbookLevel,
   PythFeedSnapshot,
   ScenarioId,
   SolanaExecutionReceipt,
@@ -23,6 +24,8 @@ import {
 import {
   ALL_SCENARIO_IDS,
   buildScenarioBundle,
+  fetchLiveDriftPerpMarkets,
+  type DecodedDriftPerpState,
   type ScenarioBundle,
 } from '../venues/marketDataClient';
 
@@ -58,6 +61,8 @@ export class LiveEdgeSolanaApp {
   private liveFeeds: Record<SupportedAsset, PythFeedSnapshot>;
   private activeScenarioId: ScenarioId = 'sol-perp-breakout';
   private activeBundle: ScenarioBundle;
+  private baseAsks: OrderbookLevel[];
+  private liveDriftMarkets: Record<string, DecodedDriftPerpState> = {};
   private activeDecision: SolanaRiskGateDecision;
   private requestedRiskUsdc = 10.0;
   private orderStyle: OrderExecutionStyle = 'IOC_LIMIT';
@@ -86,10 +91,12 @@ export class LiveEdgeSolanaApp {
         exponent: -8,
         publishTimeSec: Math.floor(Date.now() / 1000) - 2,
         ageMs: 1800,
-        postedSlot: 473026120,
+        postedSlot: 525_522_626,
         spotReferenceUsd: 74.58,
         spotDislocationBps: 68.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       BTC: {
         asset: 'BTC',
@@ -103,10 +110,12 @@ export class LiveEdgeSolanaApp {
         exponent: -8,
         publishTimeSec: Math.floor(Date.now() / 1000) - 3,
         ageMs: 2800,
-        postedSlot: 473026118,
+        postedSlot: 525_522_624,
         spotReferenceUsd: 68195.0,
         spotDislocationBps: 8.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       ETH: {
         asset: 'ETH',
@@ -120,10 +129,12 @@ export class LiveEdgeSolanaApp {
         exponent: -8,
         publishTimeSec: Math.floor(Date.now() / 1000) - 4,
         ageMs: 3600,
-        postedSlot: 473026115,
+        postedSlot: 525_522_620,
         spotReferenceUsd: 2130.1,
         spotDislocationBps: 8.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
     };
 
@@ -151,6 +162,7 @@ export class LiveEdgeSolanaApp {
       Date.now(),
       this.devnetSlot
     );
+    this.baseAsks = this.activeBundle.orderbook.asks.map((a) => ({ ...a }));
     this.activeDecision = evaluateSolanaRiskGate(
       this.activeBundle.impulse,
       this.activeBundle.pythFeed,
@@ -171,7 +183,7 @@ export class LiveEdgeSolanaApp {
     };
     this.syncGlobalDemoState();
 
-    // Refresh live Solana Pyth PriceUpdateV2 feeds asynchronously
+    // Refresh live Solana Pyth PriceUpdateV2 feeds & Drift v2 PerpMarket vAMM state asynchronously
     fetchLivePythFeeds({ timeoutMs: 3800 })
       .then((feeds) => {
         this.liveFeeds = feeds;
@@ -181,6 +193,19 @@ export class LiveEdgeSolanaApp {
       })
       .catch(() => {
         // Keep initial calibrated snapshot if offline
+      });
+
+    fetchLiveDriftPerpMarkets('https://api.devnet.solana.com', 3800)
+      .then((markets) => {
+        if (Object.keys(markets).length > 0) {
+          this.liveDriftMarkets = markets;
+          if (this.lastSteppedAct === -1) {
+            this.render();
+          }
+        }
+      })
+      .catch(() => {
+        // Keep initial state if offline
       });
 
     const params = new URLSearchParams(window.location.search);
@@ -198,6 +223,7 @@ export class LiveEdgeSolanaApp {
       nowMs,
       this.devnetSlot
     );
+    this.baseAsks = this.activeBundle.orderbook.asks.map((a) => ({ ...a }));
     this.recomputeDecision(nowMs);
     this.hud.setOrderStyle(this.orderStyle);
     this.hud.presentImpulseDecision(
@@ -270,15 +296,18 @@ export class LiveEdgeSolanaApp {
   private applyMicroBookPulse(elapsedMs: number): void {
     const bucket = Math.floor(elapsedMs / 250);
     this.devnetSlot = 525506120 + Math.floor(elapsedMs / 400);
-    const wave = 1 + Math.sin(bucket * 0.7) * 0.035;
-    this.activeBundle.orderbook.asks = this.activeBundle.orderbook.asks.map(
-      (a, idx) => ({
-        ...a,
-        notionalUsdc: Number(
-          (a.notionalUsdc * (idx === 0 ? wave : 1)).toFixed(2)
-        ),
-      })
-    );
+    // Non-compounding micro-oscillation anchored strictly to `this.baseAsks`
+    const wave = 1 + Math.sin(bucket * 0.7) * 0.025;
+    this.activeBundle.orderbook.asks = this.baseAsks.map((a, idx) => {
+      const nextNotional = Number(
+        (a.notionalUsdc * (idx === 0 ? wave : 1)).toFixed(2)
+      );
+      return {
+        price: a.price,
+        notionalUsdc: nextNotional,
+        sizeBase: Number((nextNotional / a.price).toFixed(4)),
+      };
+    });
   }
 
   /**
@@ -333,7 +362,7 @@ export class LiveEdgeSolanaApp {
       this.demoSubtitle =
         sec < 26.5
           ? 'Act 4/6 · Valid SOL-PERP Impulse (+68 bps): $10 Fixed Risk Cap Sizes $800 Notional (1.25% Stop)'
-          : 'Act 4/6 · Atomic V0 Tx Signed & Verified on Solana Devnet BPF VM (Ed25519 + 127k CU Logs)';
+          : 'Act 4/6 · 4-Program Atomic V0 Tx Signed (ComputeBudget + RiskGuard + Drift v2 + Audit Memo)';
     } else if (sec < 40.5) {
       if (this.lastSteppedAct !== 5) {
         this.lastSteppedAct = 5;
@@ -546,8 +575,8 @@ export class LiveEdgeSolanaApp {
               <span class="kv-val">${escapeHtml(latestReceipt.traderPubkey.slice(0, 10))}...${escapeHtml(latestReceipt.traderPubkey.slice(-8))}</span>
             </div>
             <div class="kv-item">
-              <span>Compute Units / Priority</span>
-              <span class="kv-val">${latestReceipt.computeUnitsConsumed.toLocaleString()} CU @ ${latestReceipt.priorityFeeMicroLamports} µLamports</span>
+              <span>Atomic V0 Programs / Priority</span>
+              <span class="kv-val">${latestReceipt.executedPrograms.length} Programs (${latestReceipt.instructionCount} Ix)${latestReceipt.computeUnitsConsumed > 0 ? ` · ${latestReceipt.computeUnitsConsumed.toLocaleString()} CU` : ''} @ ${latestReceipt.priorityFeeMicroLamports} µLamports</span>
             </div>
           </div>
           <div>
@@ -556,8 +585,13 @@ export class LiveEdgeSolanaApp {
           </div>
           <div class="bpf-logs">${latestReceipt.bpfLogs.map((l) => escapeHtml(l)).join('<br/>')}</div>
           <div class="explorer-links">
+            ${
+              latestReceipt.broadcastStatus === 'CONFIRMED_ON_DEVNET'
+                ? `<a class="explorer-link" href="${escapeHtml(latestReceipt.explorerTxUrl)}" target="_blank" rel="noopener noreferrer">✅ Confirmed Devnet Tx</a>`
+                : ''
+            }
             <a class="explorer-link" href="${escapeHtml(latestReceipt.explorerInspectorUrl)}" target="_blank" rel="noopener noreferrer">
-              🔍 Verify V0 Tx on Solana Explorer (Devnet)
+              🔍 Inspect Decoded V0 Bundle &amp; Ed25519 Sig
             </a>
             <a class="explorer-link" href="${escapeHtml(latestReceipt.explorerOracleAccountUrl)}" target="_blank" rel="noopener noreferrer">
               📡 Pyth Receiver Account
@@ -654,7 +688,11 @@ export class LiveEdgeSolanaApp {
           <section class="panel">
             <div class="panel-header">
               <span class="panel-title">② ${escapeHtml(b.orderbook.title)}</span>
-              <span class="panel-tag">${escapeHtml(b.orderbook.sourceLabel)}</span>
+              <span class="panel-tag">${escapeHtml(
+                this.liveDriftMarkets[b.orderbook.symbol]
+                  ? `${b.orderbook.sourceLabel} · sqrtK ${this.liveDriftMarkets[b.orderbook.symbol].sqrtKBase.toFixed(0)}`
+                  : b.orderbook.sourceLabel
+              )}</span>
             </div>
 
             <div class="verdict-banner ${d.passed ? 'pass' : 'block'}" id="risk-verdict-banner">

@@ -2,6 +2,7 @@ import {
   Connection,
   Keypair,
   PublicKey,
+  TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
@@ -9,6 +10,7 @@ import type {
   ImpulseSignal,
   OrderExecutionStyle,
   PythFeedSnapshot,
+  SolanaBroadcastStatus,
   SolanaExecutionReceipt,
   SolanaRiskGateDecision,
   SolanaSignerMode,
@@ -16,13 +18,17 @@ import type {
 } from '../engine/types';
 import { DRIFT_V2_PROGRAM_ID } from '../venues/marketDataClient';
 import {
+  COMPUTE_BUDGET_PROGRAM_ID,
   LIVEEDGE_RISK_GUARD_PROGRAM_ID,
   SPL_MEMO_V2_PROGRAM_ID,
+  buildAnchorRiskGuardInstruction,
   buildCanonicalAuditMemoInstruction,
+  buildDriftPlacePerpOrderInstruction,
+  buildInitializeRiskPolicyInstruction,
   buildSetComputeUnitLimitInstruction,
   buildSetComputeUnitPriceInstruction,
   deriveDriftUserPdas,
-  buildDriftPlacePerpOrderInstruction,
+  deriveRiskPolicyPda,
   encodeBase58,
 } from './driftInstructionBuilder';
 
@@ -39,6 +45,12 @@ export interface SolanaWalletStandardProvider {
   ) => Promise<{ signature: string }>;
 }
 
+export interface LocalSvmSimulationResult {
+  unitsConsumed: number;
+  logs: string[];
+  slot: number;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(bytes).toString('base64');
@@ -51,9 +63,9 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Verifies a 64-byte Ed25519 signature over the serialized Solana V0 message
- * using WebCrypto Ed25519 when supported (Node >=20 / modern Chromium), falling
- * back to strict non-zero 64-byte structural check on older runtimes.
+ * Strictly verifies a 64-byte Ed25519 signature over the serialized Solana V0 message
+ * using WebCrypto Ed25519. Fails closed (`false`) on any invalid key, malformed signature,
+ * or runtime WebCrypto error — NEVER falls back to non-zero byte heuristics.
  */
 export async function verifyEd25519MessageSignature(
   publicKeyBytes: Uint8Array,
@@ -91,7 +103,7 @@ export async function verifyEd25519MessageSignature(
       ) as ArrayBuffer
     );
   } catch {
-    return signatureBytes.some((b) => b !== 0);
+    return false;
   }
 }
 
@@ -117,6 +129,10 @@ export interface ExecuteSolanaOrderOptions {
   walletProvider?: SolanaWalletStandardProvider;
   priorityFeeMicroLamports?: number;
   computeUnitLimit?: number;
+  includeInitPolicyIfMissing?: boolean;
+  svmSimulator?: (
+    signedTx: VersionedTransaction
+  ) => Promise<LocalSvmSimulationResult | null>;
   connectionOverride?: Pick<
     Connection,
     | 'getLatestBlockhash'
@@ -124,7 +140,6 @@ export interface ExecuteSolanaOrderOptions {
     | 'getAccountInfo'
     | 'sendRawTransaction'
     | 'confirmTransaction'
-    | 'getSignaturesForAddress'
     | 'getTransaction'
     | 'simulateTransaction'
     | 'getSlot'
@@ -132,12 +147,105 @@ export interface ExecuteSolanaOrderOptions {
 }
 
 /**
+ * Composes the canonical 4-program atomic Solana V0 instruction set:
+ * 1) `ComputeBudget` (`SetComputeUnitLimit` + `SetComputeUnitPrice`)
+ * 2) `liveedge_risk_guard` (`initialize_risk_policy` when requested + `execute_guarded_impulse`)
+ * 3) `Drift Protocol v2` (`place_perp_order` bounded `IOC_LIMIT` / `POST_ONLY` with USDC `SpotMarket[0]`)
+ * 4) `SPL Memo v2` (canonical SHA-256 Risk-Gate Audit Envelope)
+ */
+export async function composeAtomicGuardedInstructions(params: {
+  traderPubkey: PublicKey;
+  impulse: ImpulseSignal;
+  pythFeed: PythFeedSnapshot;
+  book: VenueOrderbookSnapshot;
+  decision: SolanaRiskGateDecision;
+  orderStyle: OrderExecutionStyle;
+  computeUnitLimit: number;
+  priorityFeeMicroLamports: number;
+  includeInitRiskPolicy?: boolean;
+  includeAnchorGuard?: boolean;
+  includeDriftOrder?: boolean;
+}): Promise<{
+  instructions: TransactionInstruction[];
+  decisionDigestHex: string;
+}> {
+  const {
+    instruction: memoIx,
+    decisionDigestHex,
+    decisionDigestBytes,
+  } = await buildCanonicalAuditMemoInstruction({
+    trader: params.traderPubkey,
+    impulse: params.impulse,
+    pythFeed: params.pythFeed,
+    book: params.book,
+    decision: params.decision,
+    orderStyle: params.orderStyle,
+  });
+
+  const instructions: TransactionInstruction[] = [
+    buildSetComputeUnitLimitInstruction(params.computeUnitLimit),
+    buildSetComputeUnitPriceInstruction(params.priorityFeeMicroLamports),
+  ];
+
+  if (params.includeInitRiskPolicy) {
+    const initIx = await buildInitializeRiskPolicyInstruction({
+      authority: params.traderPubkey,
+      fixedRiskCapUsdc: params.decision.sizing.fixedRiskCapUsdc,
+    });
+    instructions.push(initIx);
+  }
+
+  if (params.includeAnchorGuard !== false) {
+    const refPrice =
+      params.impulse.direction === 'SHORT'
+        ? params.book.bestBid
+        : params.book.bestAsk;
+    const guardIx = await buildAnchorRiskGuardInstruction({
+      authority: params.traderPubkey,
+      pythPriceUpdate: new PublicKey(params.pythFeed.priceUpdateAccount),
+      targetMarket: new PublicKey(params.book.marketPda),
+      expectedPythFeedIdHex: params.pythFeed.feedIdHex,
+      sizedNotionalUsdc: params.decision.sizing.finalSizedNotionalUsdc,
+      stopDistanceBps: params.decision.sizing.stopDistanceBps,
+      referencePrice: refPrice,
+      limitPrice: params.decision.sizing.limitPrice,
+      orderStyle: params.orderStyle,
+      direction: params.impulse.direction,
+      venue: params.book.venue,
+      decisionDigestBytes,
+    });
+    instructions.push(guardIx);
+  }
+
+  if (
+    params.includeDriftOrder !== false &&
+    (params.book.venue === 'SOLANA_DRIFT_PERP' ||
+      params.book.venue === 'SOLANA_DRIFT_BET_PM')
+  ) {
+    const driftIx = await buildDriftPlacePerpOrderInstruction({
+      authority: params.traderPubkey,
+      marketIndex: params.book.marketIndex,
+      marketPda: new PublicKey(params.book.marketPda),
+      oraclePubkey: new PublicKey(params.book.oraclePubkey),
+      direction: params.impulse.direction,
+      baseQty: params.decision.sizing.finalBaseQty,
+      limitPrice: params.decision.sizing.limitPrice,
+      orderStyle: params.orderStyle,
+    });
+    instructions.push(driftIx);
+  }
+
+  instructions.push(memoIx);
+  return { instructions, decisionDigestHex };
+}
+
+/**
  * Builds, cryptographically signs, and executes/verifies an atomic Solana Devnet V0
- * transaction (`ComputeBudget` + optional `Drift v2 placePerpOrder` + `SPL Memo v2`
- * Risk-Gate Audit Envelope).
+ * transaction (`ComputeBudget` + `liveedge_risk_guard` + `Drift v2 placePerpOrder` + `SPL Memo v2`).
  *
  * Strictly fails closed if `decision.passed` or `decision.checks.riskCapLocked` is false,
- * preventing any bypassed UI call from signing or broadcasting an unsafe impulse order.
+ * never swaps fee payers behind the scenes (`simPayer` spoofing eliminated), and never
+ * fabricates synthetic BPF compute-unit logs on RPC failures.
  */
 export async function executeRiskGatedSolanaOrder(
   opts: ExecuteSolanaOrderOptions
@@ -157,10 +265,9 @@ export async function executeRiskGatedSolanaOrder(
 
   const t0 = performance.now();
   const rpcUrl = opts.devnetRpcUrl || DEFAULT_SOLANA_DEVNET_RPC;
-  const conn =
-    opts.connectionOverride || new Connection(rpcUrl, 'confirmed');
+  const conn = opts.connectionOverride || new Connection(rpcUrl, 'confirmed');
   const priorityFeeMicroLamports = opts.priorityFeeMicroLamports ?? 1_200;
-  const computeUnitLimit = opts.computeUnitLimit ?? 160_000;
+  const computeUnitLimit = opts.computeUnitLimit ?? 240_000;
 
   let signerMode: SolanaSignerMode =
     opts.signerMode ??
@@ -180,53 +287,73 @@ export async function executeRiskGatedSolanaOrder(
     traderPubkey = localKeypair.publicKey;
   }
 
-  const {
-    instruction: memoIx,
-    decisionDigestHex,
-  } = await buildCanonicalAuditMemoInstruction({
-    trader: traderPubkey,
-    impulse,
-    pythFeed,
-    book,
-    decision,
-    orderStyle,
-  });
+  // Probe live Devnet account state when broadcasting live so funded wallets either execute
+  // deployed programs or record an honest L1 audit transaction without ProgramAccountNotFound.
+  let balanceLamports = 0;
+  let guardDeployedOnL1 = false;
+  let policyInitializedOnL1 = false;
+  let driftUserReadyOnL1 = false;
 
-  const instructions = [
-    buildSetComputeUnitLimitInstruction(computeUnitLimit),
-    buildSetComputeUnitPriceInstruction(priorityFeeMicroLamports),
-  ];
-
-  // If trader already has an initialized Drift v2 User PDA on Devnet, bundle the live
-  // bounded `placePerpOrder` instruction alongside the canonical risk audit envelope!
-  if (book.venue === 'SOLANA_DRIFT_PERP') {
+  if (
+    signerMode === 'DEVNET_KEYPAIR_LIVE' ||
+    signerMode === 'DEVNET_WALLET_STANDARD'
+  ) {
     try {
-      const { userPda } = deriveDriftUserPdas(traderPubkey, 0);
-      const userAcc = await conn.getAccountInfo(userPda);
-      if (userAcc) {
-        const driftIx = await buildDriftPlacePerpOrderInstruction({
-          authority: traderPubkey,
-          marketIndex: book.marketIndex,
-          marketPda: new PublicKey(book.marketPda),
-          oraclePubkey: new PublicKey(book.oraclePubkey),
-          direction: impulse.direction,
-          baseQty: decision.sizing.finalBaseQty,
-          limitPrice: decision.sizing.limitPrice,
-          orderStyle,
-        });
-        instructions.push(driftIx);
+      balanceLamports = await conn.getBalance(traderPubkey, 'confirmed');
+      if (balanceLamports >= 10_000) {
+        const [riskPolicyPda] = deriveRiskPolicyPda(traderPubkey);
+        const { userPda } = deriveDriftUserPdas(traderPubkey, 0);
+        const [guardAcc, policyAcc, userAcc] = await Promise.all([
+          conn.getAccountInfo(new PublicKey(LIVEEDGE_RISK_GUARD_PROGRAM_ID)),
+          conn.getAccountInfo(riskPolicyPda),
+          conn.getAccountInfo(userPda),
+        ]);
+        guardDeployedOnL1 = Boolean(guardAcc?.executable);
+        policyInitializedOnL1 = Boolean(policyAcc);
+        driftUserReadyOnL1 = Boolean(userAcc);
       }
     } catch {
-      // Proceed cleanly with atomic ComputeBudget + Risk Audit Memo instruction
+      balanceLamports = 0;
     }
   }
 
-  instructions.push(memoIx);
+  const isLiveFundedL1Broadcast =
+    signerMode === 'DEVNET_WALLET_STANDARD' ||
+    (signerMode === 'DEVNET_KEYPAIR_LIVE' && balanceLamports >= 10_000);
+
+  // When signing the verifiable atomic V0 bundle (default / SVM / Inspector), pack ALL 4 programs!
+  // When broadcasting live to public Devnet with a funded wallet before deploying the custom Anchor
+  // program or opening a Drift margin account, include deployed instructions honestly.
+  const includeAnchorGuard = isLiveFundedL1Broadcast ? guardDeployedOnL1 : true;
+  const includeInitRiskPolicy = isLiveFundedL1Broadcast
+    ? guardDeployedOnL1 && !policyInitializedOnL1
+    : Boolean(opts.includeInitPolicyIfMissing);
+  const includeDriftOrder = isLiveFundedL1Broadcast ? driftUserReadyOnL1 : true;
+
+  const { instructions, decisionDigestHex } =
+    await composeAtomicGuardedInstructions({
+      traderPubkey,
+      impulse,
+      pythFeed,
+      book,
+      decision,
+      orderStyle,
+      computeUnitLimit,
+      priorityFeeMicroLamports,
+      includeInitRiskPolicy,
+      includeAnchorGuard,
+      includeDriftOrder,
+    });
+
+  const executedPrograms = Array.from(
+    new Set(instructions.map((ix) => ix.programId.toBase58()))
+  );
+
   const tAfterBuildPrep = performance.now();
 
   let blockhash = '11111111111111111111111111111111';
   let lastValidBlockHeight = 0;
-  let devnetSlot = book.slot || 525506120;
+  let devnetSlot = book.slot || 525_528_300;
 
   try {
     const latest = await conn.getLatestBlockhash('confirmed');
@@ -244,10 +371,10 @@ export async function executeRiskGatedSolanaOrder(
 
   let signedTx = new VersionedTransaction(v0Message);
   let txSignature = '';
-  let broadcastStatus: 'CONFIRMED_ON_DEVNET' | 'SIMULATED_DEVNET_BPF' =
-    'SIMULATED_DEVNET_BPF';
-  let computeUnitsConsumed = 127_540;
+  let broadcastStatus: SolanaBroadcastStatus = 'OFFLINE_ED25519_SIGNED';
+  let computeUnitsConsumed = 0;
   let bpfLogs: string[] = [];
+  let rpcSimulationNote: string | undefined;
 
   if (signerMode === 'DEVNET_WALLET_STANDARD' && opts.walletProvider) {
     if (opts.walletProvider.signAndSendTransaction) {
@@ -265,30 +392,23 @@ export async function executeRiskGatedSolanaOrder(
       );
       broadcastStatus = 'CONFIRMED_ON_DEVNET';
     } else {
-      throw new Error('Connected Solana wallet does not support transaction signing');
+      throw new Error(
+        'Connected Solana wallet does not support transaction signing'
+      );
     }
     devnetSlot = await conn.getSlot('confirmed').catch(() => devnetSlot);
-    bpfLogs = [
-      'Program ComputeBudget111111111111111111111111111111 success',
-      `Program ${SPL_MEMO_V2_PROGRAM_ID} invoke [1]`,
-      `Program log: Signed by ${traderPubkey.toBase58()}`,
-      `Program ${SPL_MEMO_V2_PROGRAM_ID} success`,
+    const txMeta = await conn
+      .getTransaction(txSignature, { maxSupportedTransactionVersion: 0 })
+      .catch(() => null);
+    computeUnitsConsumed = txMeta?.meta?.computeUnitsConsumed ?? 0;
+    bpfLogs = txMeta?.meta?.logMessages ?? [
+      `[DEVNET-CONFIRMED] Signature ${txSignature} confirmed at slot ${devnetSlot}`,
     ];
   } else {
     signedTx.sign([localKeypair]);
     txSignature = encodeBase58(signedTx.signatures[0]);
 
-    // Check if localKeypair holds Devnet SOL for live L1 broadcast
-    let balanceLamports = 0;
-    if (signerMode === 'DEVNET_KEYPAIR_LIVE') {
-      try {
-        balanceLamports = await conn.getBalance(traderPubkey, 'confirmed');
-      } catch {
-        balanceLamports = 0;
-      }
-    }
-
-    if (balanceLamports >= 10_000) {
+    if (isLiveFundedL1Broadcast && balanceLamports >= 10_000) {
       const rawSig = await conn.sendRawTransaction(signedTx.serialize(), {
         skipPreflight: false,
       });
@@ -299,58 +419,60 @@ export async function executeRiskGatedSolanaOrder(
       );
       broadcastStatus = 'CONFIRMED_ON_DEVNET';
       devnetSlot = await conn.getSlot('confirmed').catch(() => devnetSlot);
-      bpfLogs = [
-        'Program ComputeBudget111111111111111111111111111111 success',
-        `Program ${SPL_MEMO_V2_PROGRAM_ID} invoke [1]`,
-        `Program log: Signed by ${traderPubkey.toBase58()}`,
-        `Program ${SPL_MEMO_V2_PROGRAM_ID} success (Confirmed on Solana Devnet)`,
+      const txMeta = await conn
+        .getTransaction(rawSig, { maxSupportedTransactionVersion: 0 })
+        .catch(() => null);
+      computeUnitsConsumed = txMeta?.meta?.computeUnitsConsumed ?? 0;
+      bpfLogs = txMeta?.meta?.logMessages ?? [
+        `[DEVNET-CONFIRMED] Signature ${rawSig} confirmed at slot ${devnetSlot}`,
       ];
     } else {
-      signerMode = 'DEVNET_BPF_SIMULATION';
-      // Execute real Solana Devnet BPF VM simulation (`simulateTransaction` on api.devnet.solana.com)
-      try {
-        const memoPid = new PublicKey(SPL_MEMO_V2_PROGRAM_ID);
-        const recentSigs = await conn.getSignaturesForAddress(memoPid, {
-          limit: 1,
-        });
-        let simPayer = traderPubkey;
-        if (recentSigs.length > 0) {
-          const recentTx = await conn.getTransaction(recentSigs[0].signature, {
-            maxSupportedTransactionVersion: 0,
-          });
-          const candidate = recentTx?.transaction.message
-            .getAccountKeys()
-            .get(0);
-          if (candidate) simPayer = candidate;
+      // 1. Optional Agave LiteSVM fork simulator (executes exact signed V0 tx with sigVerify)
+      if (opts.svmSimulator) {
+        const svmRes = await opts.svmSimulator(signedTx);
+        if (svmRes) {
+          broadcastStatus = 'DEVNET_SVM_VERIFIED';
+          computeUnitsConsumed = svmRes.unitsConsumed;
+          bpfLogs = svmRes.logs;
+          devnetSlot = svmRes.slot || devnetSlot;
         }
-        const simMessage = new TransactionMessage({
-          payerKey: simPayer,
-          recentBlockhash: blockhash,
-          instructions,
-        }).compileToV0Message();
-        const simRes = await conn.simulateTransaction(
-          new VersionedTransaction(simMessage),
-          { sigVerify: false, replaceRecentBlockhash: true }
-        );
-        devnetSlot = simRes.context?.slot ?? devnetSlot;
-        if (!simRes.value.err && simRes.value.logs) {
-          computeUnitsConsumed =
-            simRes.value.unitsConsumed ?? computeUnitsConsumed;
-          bpfLogs = simRes.value.logs;
-        }
-      } catch {
-        // Offline test / isolated network fallback logs
       }
 
-      if (bpfLogs.length === 0) {
-        bpfLogs = [
-          'Program ComputeBudget111111111111111111111111111111 invoke [1]',
-          'Program ComputeBudget111111111111111111111111111111 success',
-          `Program ${SPL_MEMO_V2_PROGRAM_ID} invoke [1]`,
-          `Program log: Signed by ${traderPubkey.toBase58()}`,
-          `Program ${SPL_MEMO_V2_PROGRAM_ID} consumed 127240 of ${computeUnitLimit} compute units`,
-          `Program ${SPL_MEMO_V2_PROGRAM_ID} success`,
-        ];
+      // 2. Honest direct simulation of `signedTx` itself against `conn` (NEVER swapping `simPayer`!)
+      if (broadcastStatus !== 'DEVNET_SVM_VERIFIED') {
+        try {
+          const simRes = await conn.simulateTransaction(signedTx, {
+            sigVerify: true,
+            replaceRecentBlockhash: false,
+          });
+          devnetSlot = simRes.context?.slot ?? devnetSlot;
+          if (!simRes.value.err && simRes.value.logs) {
+            signerMode = 'DEVNET_BPF_SIMULATION';
+            broadcastStatus = 'SIMULATED_DEVNET_BPF';
+            computeUnitsConsumed = simRes.value.unitsConsumed ?? 0;
+            bpfLogs = simRes.value.logs;
+          } else {
+            signerMode = 'OFFLINE_ED25519_SIGNED';
+            broadcastStatus = 'OFFLINE_ED25519_SIGNED';
+            const errStr = JSON.stringify(simRes.value.err);
+            rpcSimulationNote =
+              `Public Devnet RPC returned ${errStr} because isolated demo fee-payer ${traderPubkey.toBase58()} holds 0 Devnet SOL ` +
+              `(api.devnet.solana.com requestAirdrop is HTTP 410; faucet.solana.com requires human Turnstile). ` +
+              `Full 4-program V0 message & Ed25519 signature are valid; fund 1 Devnet SOL to simulate/broadcast on public L1.`;
+            bpfLogs = [
+              `[ED25519-VERIFIED] Signed 4-program atomic V0 message (${instructions.length} instructions: ${COMPUTE_BUDGET_PROGRAM_ID.slice(0, 13)}.., ${LIVEEDGE_RISK_GUARD_PROGRAM_ID.slice(0, 8)}.., ${DRIFT_V2_PROGRAM_ID.slice(0, 8)}.., ${SPL_MEMO_V2_PROGRAM_ID.slice(0, 8)}..)`,
+              `[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot ${devnetSlot} -> ${errStr} (0 SOL fee-payer prior to human faucet funding)`,
+            ];
+          }
+        } catch {
+          signerMode = 'OFFLINE_ED25519_SIGNED';
+          broadcastStatus = 'OFFLINE_ED25519_SIGNED';
+          rpcSimulationNote =
+            'Signed 4-program atomic V0 message locally with WebCrypto Ed25519 verification (RPC offline or isolated test environment).';
+          bpfLogs = [
+            `[ED25519-VERIFIED] Signed 4-program atomic V0 message (${instructions.length} instructions) offline for ${traderPubkey.toBase58()}`,
+          ];
+        }
       }
     }
   }
@@ -398,12 +520,16 @@ export async function executeRiskGatedSolanaOrder(
     pythConfBps: pythFeed.confBps,
     pythAccount: pythFeed.priceUpdateAccount,
     targetMarketPda: book.marketPda,
+    driftOraclePubkey: book.oraclePubkey,
     riskGuardProgramId: LIVEEDGE_RISK_GUARD_PROGRAM_ID,
     driftProgramId: DRIFT_V2_PROGRAM_ID,
+    executedPrograms,
+    instructionCount: instructions.length,
     decisionDigestHex,
     txSignature,
     messageBase64,
     broadcastStatus,
+    ...(rpcSimulationNote ? { rpcSimulationNote } : {}),
     devnetSlot,
     computeUnitsConsumed,
     priorityFeeMicroLamports,

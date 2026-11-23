@@ -54,5 +54,13 @@ describe('LiveEdge Solana Terminal UI & Optional Even G2 HUD Integration', () =>
     expect(receipt!.ed25519Verified).toBe(true);
     expect(root.querySelector('#tx-signature-box')!.textContent!.length).toBeGreaterThan(40);
     expect(root.innerHTML).toContain('explorer.solana.com/tx/inspector?cluster=devnet');
+
+    // Regression: stepping 150 frames on thin-depth trap must NEVER compound top ask notional
+    for (let f = 0; f < 150; f++) {
+      await app.stepDeterministicDemoReel(19_200 + f * 20);
+    }
+    expect(window.__solanaDemoState?.scenarioId).toBe('pm-thin-depth-trap');
+    expect(window.__solanaDemoState?.passed).toBe(false);
+    expect(root.textContent).toContain('$5'); // top ask stays ~$4.50, never compounds to $25+
   });
 });

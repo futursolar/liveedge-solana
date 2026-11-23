@@ -13,6 +13,7 @@ import {
 import {
   ALL_SCENARIO_IDS,
   buildScenarioBundle,
+  fetchLiveDriftPerpMarkets,
 } from '../venues/marketDataClient';
 
 function parseArg(args: string[], flag: string): string | undefined {
@@ -93,11 +94,15 @@ export async function runAgentCli(argv = process.argv.slice(2)): Promise<number>
   });
 
   if (sub === 'status') {
+    const devnetRpc =
+      process.env.SOLANA_DEVNET_RPC_URL || DEFAULT_SOLANA_DEVNET_RPC;
+    const driftPerpState = await fetchLiveDriftPerpMarkets(devnetRpc, 4000);
     const payload = {
       ok: true,
       cluster: 'devnet',
-      devnetRpc: process.env.SOLANA_DEVNET_RPC_URL || DEFAULT_SOLANA_DEVNET_RPC,
+      devnetRpc,
       pythFeeds: liveFeeds,
+      driftPerpMarkets: driftPerpState,
     };
     if (jsonMode) {
       console.log(JSON.stringify(payload, null, 2));
@@ -105,7 +110,12 @@ export async function runAgentCli(argv = process.argv.slice(2)): Promise<number>
       console.log('=== LiveEdge Solana Telemetry Status ===');
       for (const feed of Object.values(liveFeeds)) {
         console.log(
-          `  ${feed.symbol}: $${feed.priceUsd.toFixed(4)} ±$${feed.confUsd.toFixed(4)} (${feed.confBps.toFixed(2)} bps) | Age ${(feed.ageMs / 1000).toFixed(1)}s | Source: ${feed.source}`
+          `  [Pyth]  ${feed.symbol}: $${feed.priceUsd.toFixed(4)} ±$${feed.confUsd.toFixed(4)} (${feed.confBps.toFixed(2)} bps) | Age ${(feed.ageMs / 1000).toFixed(1)}s | Source: ${feed.source}`
+        );
+      }
+      for (const [sym, st] of Object.entries(driftPerpState)) {
+        console.log(
+          `  [Drift] ${sym}: vAMM Reserve $${st.reservePriceUsd.toFixed(4)} | sqrtK ${st.sqrtKBase.toFixed(0)} | Delay ${st.lastOracleDelaySlots} slots`
         );
       }
     }

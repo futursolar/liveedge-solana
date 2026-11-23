@@ -4,6 +4,7 @@ import type {
   PythFeedSnapshot,
   ScenarioId,
   SupportedAsset,
+  TradeDirection,
   VenueKind,
   VenueOrderbookSnapshot,
 } from '../engine/types';
@@ -11,6 +12,12 @@ import { PYTH_CANONICAL_FEEDS } from '../oracle/pythHermesGuard';
 
 export const DRIFT_V2_PROGRAM_ID =
   'dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH';
+
+/** Canonical Drift v2 Devnet USDC Quote SpotMarket[0] PDA & Oracle (verified on api.devnet.solana.com) */
+export const DRIFT_DEVNET_USDC_SPOT_MARKET_PDA =
+  '6gMq3mRCKf8aP3ttTyYhuijVZ2LGi14oDsBbkgubfLB3';
+export const DRIFT_DEVNET_USDC_SPOT_ORACLE =
+  '9VCioxmni2gDLv11qufWzT3RDERhQE4iY5Gf7NTfYyAV';
 
 export interface DriftMarketMeta {
   marketIndex: number;
@@ -53,7 +60,7 @@ export const DRIFT_CANONICAL_MARKETS: Record<string, DriftMarketMeta> = {
   'SOL-80-DEC-BET': {
     marketIndex: 26,
     symbol: 'SOL-80-DEC-BET',
-    title: 'Solana BET Outcome Market: SOL Above $80 Weekly Close',
+    title: 'Drift v2 Devnet BET Prediction Market (#26 Binary Contract)',
     asset: 'SOL',
     venue: 'SOLANA_DRIFT_BET_PM',
     marketPda: '7rUSt1PXXn2Pp4ZNDcZqZGEgKSGpxqbRyb2W6rG1Dtt6',
@@ -116,6 +123,66 @@ export function decodeDriftPerpMarketAccount(
   };
 }
 
+function base64ToUint8(b64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    arr[i] = bin.charCodeAt(i);
+  }
+  return arr;
+}
+
+/**
+ * Queries live Drift v2 `PerpMarket` PDAs (`SOL-PERP`, `BTC-PERP`, `ETH-PERP`) directly
+ * from Solana RPC (`dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`) and decodes vAMM
+ * reserves, `peg_multiplier`, and `last_oracle_delay` slots.
+ */
+export async function fetchLiveDriftPerpMarkets(
+  rpcUrl = 'https://api.devnet.solana.com',
+  timeoutMs = 4000
+): Promise<Record<string, DecodedDriftPerpState>> {
+  const symbols = ['SOL-PERP', 'BTC-PERP', 'ETH-PERP'] as const;
+  const pdas = symbols.map((s) => DRIFT_CANONICAL_MARKETS[s].marketPda);
+  try {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getMultipleAccounts',
+        params: [pdas, { encoding: 'base64' }],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return {};
+    const body = (await res.json()) as {
+      result?: { value?: Array<{ data?: [string, string] } | null> };
+    };
+    const values = body.result?.value || [];
+    const out: Record<string, DecodedDriftPerpState> = {};
+    symbols.forEach((sym, idx) => {
+      const b64 = values[idx]?.data?.[0];
+      if (b64) {
+        try {
+          out[sym] = decodeDriftPerpMarketAccount(
+            base64ToUint8(b64),
+            DRIFT_CANONICAL_MARKETS[sym].marketPda
+          );
+        } catch {
+          // Skip malformed account entry
+        }
+      }
+    });
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export function buildL2LadderAroundMid(
   midPrice: number,
   halfSpreadRatio: number,
@@ -156,20 +223,26 @@ export function buildL2LadderAroundMid(
 }
 
 export function computeExecutableDepthUsdc(
-  asks: OrderbookLevel[],
-  limitPrice: number
+  levels: OrderbookLevel[],
+  limitPrice: number,
+  direction: TradeDirection = 'LONG'
 ): number {
   if (!Number.isFinite(limitPrice) || limitPrice <= 0) return 0;
+  const isShort = direction === 'SHORT';
   let total = 0;
-  for (const level of asks) {
+  for (const level of levels) {
     if (
       Number.isFinite(level.price) &&
       Number.isFinite(level.notionalUsdc) &&
       level.price > 0 &&
-      level.notionalUsdc > 0 &&
-      level.price <= limitPrice + 1e-9
+      level.notionalUsdc > 0
     ) {
-      total += level.notionalUsdc;
+      const withinBound = isShort
+        ? level.price >= limitPrice - 1e-9
+        : level.price <= limitPrice + 1e-9;
+      if (withinBound) {
+        total += level.notionalUsdc;
+      }
     }
   }
   return Number(total.toFixed(2));
@@ -183,17 +256,25 @@ export interface VwapExecutionSim {
   fullyFilled: boolean;
 }
 
+/**
+ * Simulates multi-rung VWAP execution across asks (`LONG`/`YES`) or bids (`SHORT`).
+ * - For Perps (`isPredictionProb = false`): `slippageBps` is relative basis points vs `bestAsk` / `bestBid`.
+ * - For Binary Prediction Markets (`isPredictionProb = true`): `slippageBps` is probability basis points
+ *   (`1 cent = $0.01 = 100 bps`), matching `maxSlippageBps = 150` (`1.5c`) across all probability levels.
+ */
 export function simulateOrderbookVwapFill(
-  asks: OrderbookLevel[],
+  levels: OrderbookLevel[],
   targetNotionalUsdc: number,
-  limitPrice: number
+  limitPrice: number,
+  direction: TradeDirection = 'LONG',
+  isPredictionProb = false
 ): VwapExecutionSim {
   if (
     !Number.isFinite(targetNotionalUsdc) ||
     targetNotionalUsdc <= 0 ||
     !Number.isFinite(limitPrice) ||
     limitPrice <= 0 ||
-    asks.length === 0
+    levels.length === 0
   ) {
     return {
       filledNotionalUsdc: 0,
@@ -204,11 +285,12 @@ export function simulateOrderbookVwapFill(
     };
   }
 
-  const sortedAsks = [...asks]
+  const isShort = direction === 'SHORT';
+  const sortedLevels = [...levels]
     .filter((a) => Number.isFinite(a.price) && a.price > 0 && a.notionalUsdc > 0)
-    .sort((a, b) => a.price - b.price);
+    .sort((a, b) => (isShort ? b.price - a.price : a.price - b.price));
 
-  if (sortedAsks.length === 0) {
+  if (sortedLevels.length === 0) {
     return {
       filledNotionalUsdc: 0,
       filledBaseQty: 0,
@@ -218,20 +300,23 @@ export function simulateOrderbookVwapFill(
     };
   }
 
-  const bestAsk = sortedAsks[0].price;
+  const bestRef = sortedLevels[0].price;
   let remainingUsdc = targetNotionalUsdc;
-  let spentUsdc = 0;
-  let acquiredBase = 0;
+  let filledUsdc = 0;
+  let filledBase = 0;
 
-  for (const rung of sortedAsks) {
-    if (rung.price > limitPrice + 1e-9 || remainingUsdc <= 1e-6) break;
+  for (const rung of sortedLevels) {
+    const outOfBounds = isShort
+      ? rung.price < limitPrice - 1e-9
+      : rung.price > limitPrice + 1e-9;
+    if (outOfBounds || remainingUsdc <= 1e-6) break;
     const takeUsdc = Math.min(remainingUsdc, rung.notionalUsdc);
-    spentUsdc += takeUsdc;
-    acquiredBase += takeUsdc / rung.price;
+    filledUsdc += takeUsdc;
+    filledBase += takeUsdc / rung.price;
     remainingUsdc -= takeUsdc;
   }
 
-  if (spentUsdc <= 0 || acquiredBase <= 0) {
+  if (filledUsdc <= 0 || filledBase <= 0) {
     return {
       filledNotionalUsdc: 0,
       filledBaseQty: 0,
@@ -241,15 +326,18 @@ export function simulateOrderbookVwapFill(
     };
   }
 
-  const vwapPrice = spentUsdc / acquiredBase;
+  const vwapPrice = filledUsdc / filledBase;
+  const adverseDelta = isShort ? bestRef - vwapPrice : vwapPrice - bestRef;
   const slippageBps =
-    bestAsk > 0
-      ? Math.max(0, Number((((vwapPrice - bestAsk) / bestAsk) * 10_000).toFixed(2)))
+    bestRef > 0
+      ? isPredictionProb
+        ? Math.max(0, Number((adverseDelta * 10_000).toFixed(2)))
+        : Math.max(0, Number(((adverseDelta / bestRef) * 10_000).toFixed(2)))
       : 0;
 
   return {
-    filledNotionalUsdc: Number(spentUsdc.toFixed(2)),
-    filledBaseQty: Number(acquiredBase.toFixed(4)),
+    filledNotionalUsdc: Number(filledUsdc.toFixed(2)),
+    filledBaseQty: Number(filledBase.toFixed(4)),
     vwapPrice: Number(vwapPrice.toFixed(4)),
     slippageBps,
     fullyFilled: remainingUsdc <= 0.05,
@@ -266,7 +354,7 @@ export interface ScenarioBundle {
 }
 
 /**
- * Materializes deterministic or live-anchored scenarios demonstrating every
+ * Materializes deterministic or live-anchored Devnet scenarios demonstrating every
  * Solana risk-gate path: valid sub-second impulse execution vs stale oracle,
  * wide Pyth confidence blowout, thin prediction-market book, and whale counter-sweeps.
  */
@@ -274,7 +362,7 @@ export function buildScenarioBundle(
   scenarioId: ScenarioId,
   liveFeeds?: Partial<Record<SupportedAsset, PythFeedSnapshot>>,
   nowMs = Date.now(),
-  devnetSlot = 525506120
+  devnetSlot = 525_528_300
 ): ScenarioBundle {
   const baseSolPrice =
     liveFeeds?.SOL && liveFeeds.SOL.priceUsd > 5
@@ -316,6 +404,8 @@ export function buildScenarioBundle(
         spotReferenceUsd: spotImpulse,
         spotDislocationBps: 68.0,
         source: liveFeeds?.SOL?.source ?? 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       orderbook: {
         marketId: 'drift-sol-perp-0',
@@ -325,7 +415,7 @@ export function buildScenarioBundle(
         asset: 'SOL',
         marketIndex: 0,
         marketPda: DRIFT_CANONICAL_MARKETS['SOL-PERP'].marketPda,
-        oraclePubkey: PYTH_CANONICAL_FEEDS.SOL.solanaPriceUpdateAccount,
+        oraclePubkey: DRIFT_CANONICAL_MARKETS['SOL-PERP'].oraclePubkey,
         bestBid,
         bestAsk,
         midPrice: Number(((bestBid + bestAsk) / 2).toFixed(4)),
@@ -350,7 +440,7 @@ export function buildScenarioBundle(
         direction: 'LONG',
         spotMoveBps: 68,
         fairValuePrice: spotImpulse,
-        stopDistanceBps: 125, // 1.25% invalidation stop => $10 risk = $800 max notional (5x collateral cap -> $800 or $1000)
+        stopDistanceBps: 125, // 1.25% invalidation stop => $10 risk = $800 max notional
         cuiBonoSafe: true,
         adverseWhaleFlowUsdc: 120,
         detectedAtMs: nowMs - 95,
@@ -384,6 +474,8 @@ export function buildScenarioBundle(
         spotReferenceUsd: Number((pythPrice * 1.008).toFixed(2)),
         spotDislocationBps: 80.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       orderbook: {
         marketId: 'drift-btc-perp-1',
@@ -393,7 +485,7 @@ export function buildScenarioBundle(
         asset: 'BTC',
         marketIndex: 1,
         marketPda: DRIFT_CANONICAL_MARKETS['BTC-PERP'].marketPda,
-        oraclePubkey: PYTH_CANONICAL_FEEDS.BTC.solanaPriceUpdateAccount,
+        oraclePubkey: DRIFT_CANONICAL_MARKETS['BTC-PERP'].oraclePubkey,
         bestBid: bids[0].price,
         bestAsk: asks[0].price,
         midPrice: pythPrice,
@@ -458,6 +550,8 @@ export function buildScenarioBundle(
         spotReferenceUsd: Number((pythPrice * 1.0075).toFixed(2)),
         spotDislocationBps: 75.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       orderbook: {
         marketId: 'drift-eth-perp-2',
@@ -467,7 +561,7 @@ export function buildScenarioBundle(
         asset: 'ETH',
         marketIndex: 2,
         marketPda: DRIFT_CANONICAL_MARKETS['ETH-PERP'].marketPda,
-        oraclePubkey: PYTH_CANONICAL_FEEDS.ETH.solanaPriceUpdateAccount,
+        oraclePubkey: DRIFT_CANONICAL_MARKETS['ETH-PERP'].oraclePubkey,
         bestBid: bids[0].price,
         bestAsk: asks[0].price,
         midPrice: pythPrice,
@@ -530,6 +624,8 @@ export function buildScenarioBundle(
         spotReferenceUsd: Number((pythPrice * 1.006).toFixed(4)),
         spotDislocationBps: 60.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       orderbook: {
         marketId: 'drift-bet-sol-80',
@@ -539,7 +635,7 @@ export function buildScenarioBundle(
         asset: 'SOL',
         marketIndex: 26,
         marketPda: DRIFT_CANONICAL_MARKETS['SOL-80-DEC-BET'].marketPda,
-        oraclePubkey: PYTH_CANONICAL_FEEDS.SOL.solanaPriceUpdateAccount,
+        oraclePubkey: DRIFT_CANONICAL_MARKETS['SOL-80-DEC-BET'].oraclePubkey,
         bestBid: bids[0].price,
         bestAsk: asks[0].price,
         midPrice: 0.54,
@@ -597,6 +693,8 @@ export function buildScenarioBundle(
         spotReferenceUsd: Number((pythPrice * 1.0062).toFixed(4)),
         spotDislocationBps: 62.0,
         source: 'SOLANA_ONCHAIN_RECEIVER',
+        cluster: 'devnet',
+        verificationLevel: 'FULL',
       },
       orderbook: {
         marketId: 'drift-sol-perp-0',
@@ -606,7 +704,7 @@ export function buildScenarioBundle(
         asset: 'SOL',
         marketIndex: 0,
         marketPda: DRIFT_CANONICAL_MARKETS['SOL-PERP'].marketPda,
-        oraclePubkey: PYTH_CANONICAL_FEEDS.SOL.solanaPriceUpdateAccount,
+        oraclePubkey: DRIFT_CANONICAL_MARKETS['SOL-PERP'].oraclePubkey,
         bestBid: bids[0].price,
         bestAsk: asks[0].price,
         midPrice: pythPrice,
@@ -667,6 +765,8 @@ export function buildScenarioBundle(
       spotReferenceUsd: Number((pythPrice * 1.0072).toFixed(4)),
       spotDislocationBps: 72.0,
       source: liveFeeds?.SOL?.source ?? 'SOLANA_ONCHAIN_RECEIVER',
+      cluster: 'devnet',
+      verificationLevel: 'FULL',
     },
     orderbook: {
       marketId: 'drift-bet-sol-80',
@@ -676,7 +776,7 @@ export function buildScenarioBundle(
       asset: 'SOL',
       marketIndex: 26,
       marketPda: DRIFT_CANONICAL_MARKETS['SOL-80-DEC-BET'].marketPda,
-      oraclePubkey: PYTH_CANONICAL_FEEDS.SOL.solanaPriceUpdateAccount,
+      oraclePubkey: DRIFT_CANONICAL_MARKETS['SOL-80-DEC-BET'].oraclePubkey,
       bestBid: bids[0].price,
       bestAsk: asks[0].price,
       midPrice: 0.53,

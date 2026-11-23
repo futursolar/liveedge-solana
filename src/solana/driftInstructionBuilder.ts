@@ -1,13 +1,18 @@
-import { PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { PublicKey, SystemProgram, TransactionInstruction } from '@solana/web3.js';
 import type {
   ImpulseSignal,
   OrderExecutionStyle,
   PythFeedSnapshot,
   SolanaRiskGateDecision,
   TradeDirection,
+  VenueKind,
   VenueOrderbookSnapshot,
 } from '../engine/types';
-import { DRIFT_V2_PROGRAM_ID } from '../venues/marketDataClient';
+import {
+  DRIFT_DEVNET_USDC_SPOT_MARKET_PDA,
+  DRIFT_DEVNET_USDC_SPOT_ORACLE,
+  DRIFT_V2_PROGRAM_ID,
+} from '../venues/marketDataClient';
 
 export const LIVEEDGE_RISK_GUARD_PROGRAM_ID =
   '7X5WrZSYtxx89cpEs9A79SSQ2ZHJtkX32fBXcwpyd7uD';
@@ -117,6 +122,17 @@ export function deriveRiskPolicyPda(authority: PublicKey): [PublicKey, number] {
   );
 }
 
+export function deriveDriftSpotMarketPda(marketIndex = 0): PublicKey {
+  const driftPid = new PublicKey(DRIFT_V2_PROGRAM_ID);
+  const idxBuf = new Uint8Array(2);
+  new DataView(idxBuf.buffer).setUint16(0, marketIndex, true);
+  const [pda] = PublicKey.findProgramAddressSync(
+    [new TextEncoder().encode('spot_market'), idxBuf],
+    driftPid
+  );
+  return pda;
+}
+
 export function deriveDriftUserPdas(
   authority: PublicKey,
   subAccountId = 0
@@ -146,8 +162,46 @@ export function deriveDriftUserPdas(
 }
 
 /**
- * Encodes Anchor `LiveEdgeRiskGuard::executeGuardedImpulse` instruction matching
- * `programs/liveedge_risk_guard/src/lib.rs` (`GuardedImpulseParams` Borsh layout).
+ * Encodes Anchor `LiveEdgeRiskGuard::initializeRiskPolicy` instruction (`30` bytes)
+ * matching `programs/liveedge_risk_guard/src/lib.rs`.
+ */
+export async function buildInitializeRiskPolicyInstruction(params: {
+  authority: PublicKey;
+  fixedRiskCapUsdc?: number;
+  maxConfBps?: number;
+  maxStalenessSec?: number;
+  maxSlippageBps?: number;
+  maxOracleDeviationBps?: number;
+}): Promise<TransactionInstruction> {
+  const discFull = await sha256Bytes('global:initialize_risk_policy');
+  const payload = new Uint8Array(30);
+  payload.set(discFull.subarray(0, 8), 0);
+  const view = new DataView(payload.buffer);
+  view.setBigUint64(
+    8,
+    BigInt(Math.round((params.fixedRiskCapUsdc ?? 10.0) * 1_000_000)),
+    true
+  );
+  view.setUint16(16, Math.round(params.maxConfBps ?? 30), true);
+  view.setBigInt64(18, BigInt(Math.round(params.maxStalenessSec ?? 45)), true);
+  view.setUint16(26, Math.round(params.maxSlippageBps ?? 20), true);
+  view.setUint16(28, Math.round(params.maxOracleDeviationBps ?? 150), true);
+
+  const [riskPolicyPda] = deriveRiskPolicyPda(params.authority);
+  return new TransactionInstruction({
+    programId: new PublicKey(LIVEEDGE_RISK_GUARD_PROGRAM_ID),
+    keys: [
+      { pubkey: params.authority, isSigner: true, isWritable: true },
+      { pubkey: riskPolicyPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: toInstructionData(payload),
+  });
+}
+
+/**
+ * Encodes Anchor `LiveEdgeRiskGuard::executeGuardedImpulse` instruction (`101` bytes)
+ * matching `programs/liveedge_risk_guard/src/lib.rs` (`GuardedImpulseParams` Borsh layout).
  */
 export async function buildAnchorRiskGuardInstruction(params: {
   authority: PublicKey;
@@ -156,9 +210,12 @@ export async function buildAnchorRiskGuardInstruction(params: {
   expectedPythFeedIdHex: string;
   sizedNotionalUsdc: number;
   stopDistanceBps: number;
-  referenceAsk: number;
+  referencePrice?: number;
+  referenceAsk?: number;
   limitPrice: number;
   orderStyle: OrderExecutionStyle;
+  direction?: TradeDirection;
+  venue?: VenueKind;
   decisionDigestBytes: Uint8Array;
 }): Promise<TransactionInstruction> {
   const discFull = await sha256Bytes('global:execute_guarded_impulse');
@@ -171,16 +228,24 @@ export async function buildAnchorRiskGuardInstruction(params: {
     throw new Error('decisionDigestBytes must be 32 bytes');
   }
 
-  // Borsh layout:
-  // [0..8]   discriminator
-  // [8..40]  expected_pyth_feed_id ([u8; 32])
-  // [40..48] sized_notional_usdc_e6 (u64 LE)
-  // [48..50] stop_distance_bps (u16 LE)
-  // [50..58] reference_ask_e6 (u64 LE)
-  // [58..66] limit_price_e6 (u64 LE)
-  // [66]     order_mode enum (0 = BlindMarket [forbidden], 1 = IocLimit, 2 = PostOnly)
-  // [67..99] decision_digest ([u8; 32])
-  const payload = new Uint8Array(99);
+  const refPrice = params.referencePrice ?? params.referenceAsk ?? 0;
+  const isBinaryPrediction =
+    params.venue === 'SOLANA_DRIFT_BET_PM' ||
+    params.venue === 'POLYMARKET_GAMMA_PM' ||
+    params.stopDistanceBps === 10_000;
+
+  // Borsh layout (`101` bytes):
+  // [0..8]    discriminator
+  // [8..40]   expected_pyth_feed_id ([u8; 32])
+  // [40..48]  sized_notional_usdc_e6 (u64 LE)
+  // [48..50]  stop_distance_bps (u16 LE)
+  // [50..58]  reference_price_e6 (u64 LE)
+  // [58..66]  limit_price_e6 (u64 LE)
+  // [66]      order_mode enum (0 = BlindMarket [forbidden], 1 = IocLimit, 2 = PostOnly)
+  // [67]      trade_side enum (0 = Long, 1 = Short)
+  // [68]      market_kind enum (0 = Perp, 1 = BinaryPrediction)
+  // [69..101] decision_digest ([u8; 32])
+  const payload = new Uint8Array(101);
   payload.set(discriminator, 0);
   payload.set(feedBytes, 8);
 
@@ -191,10 +256,12 @@ export async function buildAnchorRiskGuardInstruction(params: {
     true
   );
   view.setUint16(48, Math.round(params.stopDistanceBps), true);
-  view.setBigUint64(50, BigInt(Math.round(params.referenceAsk * 1_000_000)), true);
+  view.setBigUint64(50, BigInt(Math.round(refPrice * 1_000_000)), true);
   view.setBigUint64(58, BigInt(Math.round(params.limitPrice * 1_000_000)), true);
   view.setUint8(66, params.orderStyle === 'POST_ONLY' ? 2 : 1);
-  payload.set(params.decisionDigestBytes, 67);
+  view.setUint8(67, params.direction === 'SHORT' ? 1 : 0);
+  view.setUint8(68, isBinaryPrediction ? 1 : 0);
+  payload.set(params.decisionDigestBytes, 69);
 
   const [riskPolicyPda] = deriveRiskPolicyPda(params.authority);
 
@@ -214,12 +281,19 @@ export async function buildAnchorRiskGuardInstruction(params: {
  * Encodes a bounded Drift Protocol v2 `placePerpOrder` instruction (`dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`).
  * Never uses `OrderType::Market` (0); strictly uses `OrderType::Limit` (1) with
  * `immediateOrCancel = true` (`IOC_LIMIT`) or `PostOnlyParam::MustPostOnly` (`POST_ONLY`).
+ *
+ * Supplies `remaining_accounts` in Drift v2 `optional_accounts::load_maps` canonical sequence:
+ * 1) `OracleMap` accounts (`usdcSpotOracle` + `perpOracle`),
+ * 2) `SpotMarketMap` accounts (`SpotMarket[0]` USDC quote market `6gMq3mRCKf8aP3ttTyYhuijVZ2LGi14oDsBbkgubfLB3` for margin valuation),
+ * 3) `PerpMarketMap` accounts (`marketPda` writable).
  */
 export async function buildDriftPlacePerpOrderInstruction(params: {
   authority: PublicKey;
   marketIndex: number;
   marketPda: PublicKey;
   oraclePubkey: PublicKey;
+  usdcSpotMarketPda?: PublicKey;
+  usdcSpotOraclePubkey?: PublicKey;
   direction: TradeDirection;
   baseQty: number;
   limitPrice: number;
@@ -228,35 +302,25 @@ export async function buildDriftPlacePerpOrderInstruction(params: {
   const discFull = await sha256Bytes('global:place_perp_order');
   const discriminator = discFull.subarray(0, 8);
 
-  // Drift `OrderParams` Borsh serialization:
-  // order_type: u8 (1 = Limit)
-  // market_type: u8 (1 = Perp)
-  // direction: u8 (0 = Long, 1 = Short)
-  // user_order_id: u8 (1)
-  // base_asset_amount: u64 (BASE_PRECISION = 10^9)
-  // price: u64 (PRICE_PRECISION = 10^6)
-  // market_index: u16
-  // reduce_only: bool (0)
-  // post_only: u8 (0 = None, 1 = MustPostOnly)
-  // immediate_or_cancel: bool (1 for IOC_LIMIT, 0 for POST_ONLY)
-  // max_ts: Option<i64> (0 = None)
-  // trigger_price: Option<u64> (0 = None)
-  // trigger_condition: u8 (0 = Above)
-  // oracle_price_offset: Option<i32> (0 = None)
-  // auction_duration: Option<u8> (0 = None)
-  // auction_start_price: Option<i64> (0 = None)
-  // auction_end_price: Option<i64> (0 = None)
   const buf = new Uint8Array(8 + 32);
   buf.set(discriminator, 0);
   const view = new DataView(buf.buffer);
   let off = 8;
-  view.setUint8(off++, 1); // OrderType::Limit
-  view.setUint8(off++, 1); // MarketType::Perp
+  view.setUint8(off++, 1); // OrderType::Limit (1) — never Market (0)
+  view.setUint8(off++, 1); // MarketType::Perp (1)
   view.setUint8(off++, params.direction === 'SHORT' ? 1 : 0);
   view.setUint8(off++, 1); // user_order_id
-  view.setBigUint64(off, BigInt(Math.round(params.baseQty * 1_000_000_000)), true);
+  view.setBigUint64(
+    off,
+    BigInt(Math.round(params.baseQty * 1_000_000_000)),
+    true
+  );
   off += 8;
-  view.setBigUint64(off, BigInt(Math.round(params.limitPrice * 1_000_000)), true);
+  view.setBigUint64(
+    off,
+    BigInt(Math.round(params.limitPrice * 1_000_000)),
+    true
+  );
   off += 8;
   view.setUint16(off, params.marketIndex, true);
   off += 2;
@@ -272,6 +336,19 @@ export async function buildDriftPlacePerpOrderInstruction(params: {
   view.setUint8(off++, 0); // auction_end_price = None
 
   const { statePda, userPda } = deriveDriftUserPdas(params.authority, 0);
+  const usdcSpotPda =
+    params.usdcSpotMarketPda ??
+    new PublicKey(DRIFT_DEVNET_USDC_SPOT_MARKET_PDA);
+  const usdcOracle =
+    params.usdcSpotOraclePubkey ??
+    new PublicKey(DRIFT_DEVNET_USDC_SPOT_ORACLE);
+
+  const oracleKeys = usdcOracle.equals(params.oraclePubkey)
+    ? [{ pubkey: params.oraclePubkey, isSigner: false, isWritable: false }]
+    : [
+        { pubkey: usdcOracle, isSigner: false, isWritable: false },
+        { pubkey: params.oraclePubkey, isSigner: false, isWritable: false },
+      ];
 
   return new TransactionInstruction({
     programId: new PublicKey(DRIFT_V2_PROGRAM_ID),
@@ -279,7 +356,11 @@ export async function buildDriftPlacePerpOrderInstruction(params: {
       { pubkey: statePda, isSigner: false, isWritable: false },
       { pubkey: userPda, isSigner: false, isWritable: true },
       { pubkey: params.authority, isSigner: true, isWritable: false },
-      { pubkey: params.oraclePubkey, isSigner: false, isWritable: false },
+      // Remaining accounts Phase 1: OracleMap
+      ...oracleKeys,
+      // Remaining accounts Phase 2: SpotMarketMap (USDC Quote Collateral Market 0)
+      { pubkey: usdcSpotPda, isSigner: false, isWritable: false },
+      // Remaining accounts Phase 3: PerpMarketMap (Target Perp/BET Market)
       { pubkey: params.marketPda, isSigner: false, isWritable: true },
     ],
     data: toInstructionData(buf.subarray(0, off)),
@@ -301,6 +382,7 @@ export interface CanonicalAuditEnvelope {
   pythConfBps: number;
   pythAcc: string;
   marketPda: string;
+  driftOracle: string;
   digest: string;
 }
 
@@ -333,6 +415,7 @@ export async function buildCanonicalAuditMemoInstruction(params: {
     pythConfBps: params.pythFeed.confBps,
     pythFeedIdHex: params.pythFeed.feedIdHex,
     marketPda: params.book.marketPda,
+    driftOraclePubkey: params.book.oraclePubkey,
   });
 
   const decisionDigestBytes = await sha256Bytes(preimage);
@@ -353,6 +436,7 @@ export async function buildCanonicalAuditMemoInstruction(params: {
     pythConfBps: params.pythFeed.confBps,
     pythAcc: params.pythFeed.priceUpdateAccount,
     marketPda: params.book.marketPda,
+    driftOracle: params.book.oraclePubkey,
     digest: decisionDigestHex.slice(0, 24),
   };
 

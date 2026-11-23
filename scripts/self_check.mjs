@@ -9,9 +9,13 @@ import { chromium } from 'playwright-core';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
-function runStep(label, cmd, args) {
+function runStep(label, cmd, args, extraEnv = {}) {
   process.stdout.write(`\n[SELF-CHECK] ${label} ...\n`);
-  execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit' });
+  execFileSync(cmd, args, {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: { ...process.env, ...extraEnv },
+  });
 }
 
 function findChromiumExecutable() {
@@ -115,7 +119,7 @@ function runDesensitizationAudit() {
     }
   }
 
-  const skipDirs = new Set(['node_modules', '.git', 'demo']);
+  const skipDirs = new Set(['node_modules', '.git', 'demo', 'target']);
   const scanned = [];
 
   function scanDir(dir) {
@@ -208,7 +212,37 @@ async function runPlaywrightSmokeE2E() {
   }
 }
 
+function findCargoExecutable() {
+  const candidates = [
+    process.env.CARGO,
+    path.join(os.homedir(), '.cargo', 'bin', 'cargo'),
+    '/usr/bin/cargo',
+    '/usr/local/bin/cargo',
+  ].filter(Boolean);
+  for (const bin of candidates) {
+    if (fs.existsSync(bin)) return bin;
+  }
+  return 'cargo';
+}
+
 async function main() {
+  const cargoBin = findCargoExecutable();
+  runStep(
+    'Rust / Anchor Workspace Check (idl-build)',
+    cargoBin,
+    ['check', '--workspace', '--features', 'liveedge-risk-guard/idl-build'],
+    {
+      ANCHOR_IDL_BUILD_PROGRAM_PATH: path.join(
+        ROOT,
+        'programs',
+        'liveedge_risk_guard'
+      ),
+    }
+  );
+  runStep('Rust / Anchor On-Chain Guard Unit Tests', cargoBin, [
+    'test',
+    '--workspace',
+  ]);
   runStep('TypeScript Strict Check', 'npm', ['run', 'typecheck']);
   runStep('ESLint Static Analysis', 'npm', ['run', 'lint']);
   runStep('Vitest Automated Test Suite', 'npm', ['run', 'test']);

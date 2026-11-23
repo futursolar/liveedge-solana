@@ -152,6 +152,22 @@ async function main() {
     ...(executablePath ? { executablePath } : {}),
   });
 
+  const cleanupSignal = async () => {
+    try {
+      await browser.close();
+    } catch {
+      // ignore
+    }
+    try {
+      server.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+    process.exit(143);
+  };
+  process.once('SIGTERM', cleanupSignal);
+  process.once('SIGINT', cleanupSignal);
+
   const fps = 30;
   const durationSec = 50;
   const totalFrames = fps * durationSec;

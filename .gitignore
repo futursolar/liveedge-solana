@@ -1,13 +1,10 @@
 node_modules/
 dist/
 dist-cli/
+target/
 demo/frames/
 demo/*.wav
-.env
-.env.*
-*.pem
-*.key
-*keypair*.json
-.secrets/
+*.env
+*.keypair.json
+devnet-keypair*.json
 .DS_Store
-coverage/

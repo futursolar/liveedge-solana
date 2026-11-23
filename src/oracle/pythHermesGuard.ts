@@ -8,6 +8,8 @@ import type {
 export const PYTH_SOLANA_RECEIVER_PROGRAM_ID =
   'rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ';
 
+export const DEFAULT_PYTH_SOLANA_DEVNET_RPC = 'https://api.devnet.solana.com';
+
 export const PYTH_PRICE_UPDATE_V2_DISCRIMINATOR = [
   34, 241, 35, 99, 157, 126, 244, 205,
 ] as const;
@@ -30,8 +32,8 @@ export const PYTH_CANONICAL_FEEDS: Record<SupportedAsset, PythFeedConfig> = {
       'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
     solanaPriceUpdateAccount: '7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE',
     coinbaseProduct: 'SOL-USD',
-    fallbackPriceUsd: 74.12,
-    fallbackConfUsd: 0.021,
+    fallbackPriceUsd: 73.52,
+    fallbackConfUsd: 0.025,
   },
   BTC: {
     asset: 'BTC',
@@ -40,8 +42,8 @@ export const PYTH_CANONICAL_FEEDS: Record<SupportedAsset, PythFeedConfig> = {
       'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
     solanaPriceUpdateAccount: '4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo',
     coinbaseProduct: 'BTC-USD',
-    fallbackPriceUsd: 68140.5,
-    fallbackConfUsd: 14.2,
+    fallbackPriceUsd: 61405.48,
+    fallbackConfUsd: 18.42,
   },
   ETH: {
     asset: 'ETH',
@@ -50,8 +52,8 @@ export const PYTH_CANONICAL_FEEDS: Record<SupportedAsset, PythFeedConfig> = {
       'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
     solanaPriceUpdateAccount: '42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC',
     coinbaseProduct: 'ETH-USD',
-    fallbackPriceUsd: 2128.4,
-    fallbackConfUsd: 0.85,
+    fallbackPriceUsd: 1820.36,
+    fallbackConfUsd: 0.72,
   },
 };
 
@@ -96,7 +98,8 @@ export function decodePythPriceUpdateV2(
   accountAddress: string,
   assetHint?: SupportedAsset,
   spotReferenceUsd?: number,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  cluster: 'devnet' | 'mainnet-beta' = 'devnet'
 ): PythFeedSnapshot {
   if (rawBytes.length < 133) {
     throw new Error(
@@ -115,6 +118,9 @@ export function decodePythPriceUpdateV2(
     rawBytes.byteLength
   );
   const verTag = view.getUint8(40);
+  if (verTag > 1) {
+    throw new Error(`Invalid PriceUpdateV2 verification tag: ${verTag}`);
+  }
   const feedOffset = verTag === 0 ? 42 : 41;
   if (rawBytes.length < feedOffset + 92) {
     throw new Error('Truncated PriceUpdateV2 payload');
@@ -172,6 +178,8 @@ export function decodePythPriceUpdateV2(
     spotReferenceUsd: Number(refSpot.toFixed(4)),
     spotDislocationBps,
     source: 'SOLANA_ONCHAIN_RECEIVER',
+    cluster,
+    verificationLevel: verTag === 1 ? 'FULL' : 'PARTIAL',
   };
 }
 
@@ -179,6 +187,7 @@ export interface FetchPythFeedsOptions {
   hermesUrl?: string;
   hermesBearerToken?: string;
   solanaRpcUrl?: string;
+  cluster?: 'devnet' | 'mainnet-beta';
   includeCoinbaseSpot?: boolean;
   timeoutMs?: number;
   nowMs?: number;
@@ -210,31 +219,38 @@ async function fetchCoinbaseSpotMid(
 }
 
 /**
- * Fetches live SOL/USD, BTC/USD, and ETH/USD prices + confidence intervals:
+ * Fetches live SOL/USD, BTC/USD, and ETH/USD prices + confidence intervals on Solana Devnet:
  * 1. Uses official `@pythnetwork/hermes-client` (`HermesClient`) when `hermesBearerToken`
  *    is supplied (compliant with Pyth Core Upgrade authenticated Hermes v2).
- * 2. Seamlessly falls back to zero-key native Solana RPC binary `PriceUpdateV2`
- *    (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`) account decoding + live Coinbase L2 spot
- *    so open-source judges get real live Solana oracle telemetry out of the box with zero API keys.
+ * 2. Seamlessly falls back to zero-key native Solana Devnet RPC binary `PriceUpdateV2`
+ *    (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ` on `https://api.devnet.solana.com`)
+ *    account decoding + live Coinbase L2 spot so `postedSlot` and Explorer links stay 100% Devnet-consistent.
  */
 export async function fetchLivePythFeeds(
   opts: FetchPythFeedsOptions = {}
 ): Promise<Record<SupportedAsset, PythFeedSnapshot>> {
   const timeoutMs = opts.timeoutMs ?? 4500;
   const nowMs = opts.nowMs ?? Date.now();
+  const rpcUrl = opts.solanaRpcUrl || DEFAULT_PYTH_SOLANA_DEVNET_RPC;
+  const cluster: 'devnet' | 'mainnet-beta' =
+    opts.cluster ?? (rpcUrl.includes('mainnet') ? 'mainnet-beta' : 'devnet');
   const assets: SupportedAsset[] = ['SOL', 'BTC', 'ETH'];
 
-  const spotEntries = opts.includeCoinbaseSpot !== false
-    ? await Promise.all(
-        assets.map(async (asset) => [
-          asset,
-          await fetchCoinbaseSpotMid(
-            PYTH_CANONICAL_FEEDS[asset].coinbaseProduct,
-            Math.min(2500, timeoutMs)
-          ),
-        ] as const)
-      )
-    : assets.map((a) => [a, null] as const);
+  const spotEntries =
+    opts.includeCoinbaseSpot !== false
+      ? await Promise.all(
+          assets.map(
+            async (asset) =>
+              [
+                asset,
+                await fetchCoinbaseSpotMid(
+                  PYTH_CANONICAL_FEEDS[asset].coinbaseProduct,
+                  Math.min(2500, timeoutMs)
+                ),
+              ] as const
+          )
+        )
+      : assets.map((a) => [a, null] as const);
   const spotMap = Object.fromEntries(spotEntries) as Record<
     SupportedAsset,
     number | null
@@ -293,6 +309,8 @@ export async function fetchLivePythFeeds(
                 ? Number((((spotRef - priceUsd) / priceUsd) * 10_000).toFixed(2))
                 : 0,
             source: 'HERMES_V2_STREAM',
+            cluster,
+            verificationLevel: 'FULL',
           };
         }
         if (out.SOL && out.BTC && out.ETH) {
@@ -300,12 +318,11 @@ export async function fetchLivePythFeeds(
         }
       }
     } catch {
-      // Fall through to zero-key native Solana RPC PriceUpdateV2 reader
+      // Fall through to zero-key native Solana Devnet RPC PriceUpdateV2 reader
     }
   }
 
-  // Path 2: Native Solana RPC `PriceUpdateV2` (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)
-  const rpcUrl = opts.solanaRpcUrl || 'https://api.mainnet-beta.solana.com';
+  // Path 2: Native Solana Devnet RPC `PriceUpdateV2` (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)
   try {
     const pubkeys = assets.map(
       (a) => PYTH_CANONICAL_FEEDS[a].solanaPriceUpdateAccount
@@ -333,14 +350,20 @@ export async function fetchLivePythFeeds(
       assets.forEach((asset, idx) => {
         const entry = values[idx];
         const cfg = PYTH_CANONICAL_FEEDS[asset];
-        if (entry && Array.isArray(entry.data) && entry.data[0]) {
+        if (
+          entry &&
+          entry.owner === PYTH_SOLANA_RECEIVER_PROGRAM_ID &&
+          Array.isArray(entry.data) &&
+          entry.data[0]
+        ) {
           const bytes = base64ToBytes(entry.data[0]);
           decodedMap[asset] = decodePythPriceUpdateV2(
             bytes,
             cfg.solanaPriceUpdateAccount,
             asset,
             spotMap[asset] ?? undefined,
-            nowMs
+            nowMs,
+            cluster
           );
         }
       });
@@ -349,10 +372,10 @@ export async function fetchLivePythFeeds(
       }
     }
   } catch {
-    // Fall through to deterministic curated replay fallback
+    // Fall through to deterministic Devnet replay fallback
   }
 
-  // Path 3: Offline / deterministic fallback
+  // Path 3: Offline / deterministic Devnet fallback
   const fallbackOut = {} as Record<SupportedAsset, PythFeedSnapshot>;
   for (const asset of assets) {
     const cfg = PYTH_CANONICAL_FEEDS[asset];
@@ -370,18 +393,20 @@ export async function fetchLivePythFeeds(
       exponent: -8,
       publishTimeSec: Math.floor((nowMs - 1400) / 1000),
       ageMs: 1400,
-      postedSlot: 473026100,
+      postedSlot: 525_522_626,
       spotReferenceUsd: Number((priceUsd * 1.0042).toFixed(4)),
       spotDislocationBps: 42.0,
       source: 'CURATED_REPLAY',
+      cluster,
+      verificationLevel: 'FULL',
     };
   }
   return fallbackOut;
 }
 
 /**
- * Evaluates Pyth oracle snapshot for numeric validity, sub-minute freshness,
- * and confidence interval tightness (`conf / price <= maxPythConfBps`).
+ * Evaluates Pyth oracle snapshot for numeric validity, full Wormhole guardian verification,
+ * sub-minute freshness, and confidence interval tightness (`conf / price <= maxPythConfBps`).
  */
 export function evaluatePythOracleGuard(
   feed: PythFeedSnapshot,
@@ -406,6 +431,19 @@ export function evaluatePythOracleGuard(
       spotDislocationBps: Number.isFinite(feed.spotDislocationBps)
         ? feed.spotDislocationBps
         : 0,
+      maxConfBps,
+      maxStalenessMs,
+    };
+  }
+
+  if (feed.verificationLevel === 'PARTIAL') {
+    return {
+      passed: false,
+      rejectionCode: 'ORACLE_CONFIDENCE_TOO_WIDE',
+      reason: `Pyth Guard Block: ${feed.symbol} PriceUpdateV2 has Partial guardian quorum (VerificationLevel::Full required)`,
+      confBps: feed.confBps,
+      ageMs: feed.ageMs,
+      spotDislocationBps: feed.spotDislocationBps,
       maxConfBps,
       maxStalenessMs,
     };
