@@ -186,7 +186,6 @@ export type SolanaSignerMode =
 export type SolanaBroadcastStatus =
   | 'CONFIRMED_ON_DEVNET'
   | 'SIMULATED_DEVNET_BPF'
-  | 'DEVNET_SVM_VERIFIED'
   | 'OFFLINE_ED25519_SIGNED';
 
 export interface LatencyWaterfallMs {

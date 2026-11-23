@@ -45,12 +45,6 @@ export interface SolanaWalletStandardProvider {
   ) => Promise<{ signature: string }>;
 }
 
-export interface LocalSvmSimulationResult {
-  unitsConsumed: number;
-  logs: string[];
-  slot: number;
-}
-
 function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(bytes).toString('base64');
@@ -130,9 +124,6 @@ export interface ExecuteSolanaOrderOptions {
   priorityFeeMicroLamports?: number;
   computeUnitLimit?: number;
   includeInitPolicyIfMissing?: boolean;
-  svmSimulator?: (
-    signedTx: VersionedTransaction
-  ) => Promise<LocalSvmSimulationResult | null>;
   connectionOverride?: Pick<
     Connection,
     | 'getLatestBlockhash'
@@ -256,7 +247,10 @@ export async function executeRiskGatedSolanaOrder(
     !decision.checks.riskCapLocked ||
     !Number.isFinite(decision.sizing.finalSizedNotionalUsdc) ||
     decision.sizing.finalSizedNotionalUsdc <= 0 ||
-    decision.sizing.impliedMaxLossUsdc > decision.sizing.fixedRiskCapUsdc + 0.01
+    decision.sizing.impliedMaxLossUsdc > decision.sizing.fixedRiskCapUsdc ||
+    BigInt(Math.round(decision.sizing.finalSizedNotionalUsdc * 1_000_000)) *
+      BigInt(Math.round(decision.sizing.stopDistanceBps)) >
+      BigInt(Math.round(decision.sizing.fixedRiskCapUsdc * 1_000_000)) * 10_000n
   ) {
     throw new Error(
       `Refusing to sign/broadcast Solana transaction: RiskGate rejected (${decision.rejectionCode}: ${decision.reason})`
@@ -427,52 +421,39 @@ export async function executeRiskGatedSolanaOrder(
         `[DEVNET-CONFIRMED] Signature ${rawSig} confirmed at slot ${devnetSlot}`,
       ];
     } else {
-      // 1. Optional Agave LiteSVM fork simulator (executes exact signed V0 tx with sigVerify)
-      if (opts.svmSimulator) {
-        const svmRes = await opts.svmSimulator(signedTx);
-        if (svmRes) {
-          broadcastStatus = 'DEVNET_SVM_VERIFIED';
-          computeUnitsConsumed = svmRes.unitsConsumed;
-          bpfLogs = svmRes.logs;
-          devnetSlot = svmRes.slot || devnetSlot;
-        }
-      }
-
-      // 2. Honest direct simulation of `signedTx` itself against `conn` (NEVER swapping `simPayer`!)
-      if (broadcastStatus !== 'DEVNET_SVM_VERIFIED') {
-        try {
-          const simRes = await conn.simulateTransaction(signedTx, {
-            sigVerify: true,
-            replaceRecentBlockhash: false,
-          });
-          devnetSlot = simRes.context?.slot ?? devnetSlot;
-          if (!simRes.value.err && simRes.value.logs) {
-            signerMode = 'DEVNET_BPF_SIMULATION';
-            broadcastStatus = 'SIMULATED_DEVNET_BPF';
-            computeUnitsConsumed = simRes.value.unitsConsumed ?? 0;
-            bpfLogs = simRes.value.logs;
-          } else {
-            signerMode = 'OFFLINE_ED25519_SIGNED';
-            broadcastStatus = 'OFFLINE_ED25519_SIGNED';
-            const errStr = JSON.stringify(simRes.value.err);
-            rpcSimulationNote =
-              `Public Devnet RPC returned ${errStr} because isolated demo fee-payer ${traderPubkey.toBase58()} holds 0 Devnet SOL ` +
-              `(api.devnet.solana.com requestAirdrop is HTTP 410; faucet.solana.com requires human Turnstile). ` +
-              `Full 4-program V0 message & Ed25519 signature are valid; fund 1 Devnet SOL to simulate/broadcast on public L1.`;
-            bpfLogs = [
-              `[ED25519-VERIFIED] Signed 4-program atomic V0 message (${instructions.length} instructions: ${COMPUTE_BUDGET_PROGRAM_ID.slice(0, 13)}.., ${LIVEEDGE_RISK_GUARD_PROGRAM_ID.slice(0, 8)}.., ${DRIFT_V2_PROGRAM_ID.slice(0, 8)}.., ${SPL_MEMO_V2_PROGRAM_ID.slice(0, 8)}..)`,
-              `[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot ${devnetSlot} -> ${errStr} (0 SOL fee-payer prior to human faucet funding)`,
-            ];
-          }
-        } catch {
+      // Honest direct simulation of `signedTx` itself against `conn` (NEVER swapping `simPayer`!)
+      try {
+        const simRes = await conn.simulateTransaction(signedTx, {
+          sigVerify: true,
+          replaceRecentBlockhash: false,
+        });
+        devnetSlot = simRes.context?.slot ?? devnetSlot;
+        if (!simRes.value.err && simRes.value.logs) {
+          signerMode = 'DEVNET_BPF_SIMULATION';
+          broadcastStatus = 'SIMULATED_DEVNET_BPF';
+          computeUnitsConsumed = simRes.value.unitsConsumed ?? 0;
+          bpfLogs = simRes.value.logs;
+        } else {
           signerMode = 'OFFLINE_ED25519_SIGNED';
           broadcastStatus = 'OFFLINE_ED25519_SIGNED';
+          const errStr = JSON.stringify(simRes.value.err);
           rpcSimulationNote =
-            'Signed 4-program atomic V0 message locally with WebCrypto Ed25519 verification (RPC offline or isolated test environment).';
+            `Public Devnet RPC returned ${errStr} because isolated demo fee-payer ${traderPubkey.toBase58()} holds 0 Devnet SOL ` +
+            `(api.devnet.solana.com requestAirdrop is HTTP 410; faucet.solana.com requires human Turnstile). ` +
+            `Full 4-program V0 message & Ed25519 signature are valid; fund 1 Devnet SOL to simulate/broadcast on public L1.`;
           bpfLogs = [
-            `[ED25519-VERIFIED] Signed 4-program atomic V0 message (${instructions.length} instructions) offline for ${traderPubkey.toBase58()}`,
+            `[ED25519-VERIFIED] Signed 4-program atomic V0 message (${instructions.length} instructions: ${COMPUTE_BUDGET_PROGRAM_ID.slice(0, 13)}.., ${LIVEEDGE_RISK_GUARD_PROGRAM_ID.slice(0, 8)}.., ${DRIFT_V2_PROGRAM_ID.slice(0, 8)}.., ${SPL_MEMO_V2_PROGRAM_ID.slice(0, 8)}..)`,
+            `[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot ${devnetSlot} -> ${errStr} (0 SOL fee-payer prior to human faucet funding)`,
           ];
         }
+      } catch {
+        signerMode = 'OFFLINE_ED25519_SIGNED';
+        broadcastStatus = 'OFFLINE_ED25519_SIGNED';
+        rpcSimulationNote =
+          'Signed 4-program atomic V0 message locally with WebCrypto Ed25519 verification (RPC offline or isolated test environment).';
+        bpfLogs = [
+          `[ED25519-VERIFIED] Signed 4-program atomic V0 message (${instructions.length} instructions) offline for ${traderPubkey.toBase58()}`,
+        ];
       }
     }
   }

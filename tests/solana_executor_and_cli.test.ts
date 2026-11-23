@@ -1,7 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   Keypair,
   PublicKey,
   TransactionMessage,
+  VersionedMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
 import { address, getTransactionDecoder, lamports } from '@solana/kit';
@@ -234,7 +237,7 @@ describe('Solana Devnet Executor, Agave LiteSVM Verification & Anti-Spoofing Gua
     }
   });
 
-  it('signs V0 transaction and broadcasts live when funded on Devnet, and executes real BPF in Agave LiteSVM', async () => {
+  it('signs V0 transaction and broadcasts live when funded on Devnet, and executes 3-instruction ComputeBudget + SPL Memo v2 audit envelope in Agave LiteSVM', async () => {
     const nowMs = Date.now();
     const bundle = buildScenarioBundle('sol-perp-breakout', undefined, nowMs);
     const decision = evaluateSolanaRiskGate(
@@ -247,7 +250,7 @@ describe('Solana Devnet Executor, Agave LiteSVM Verification & Anti-Spoofing Gua
     );
     const trader = Keypair.generate();
 
-    // Part A: Real Agave LiteSVM execution with Ed25519 signature verification (`withSigverify(true)`)
+    // Part A: Standalone 3-instruction ComputeBudget + SPL Memo v2 audit-envelope execution in Agave LiteSVM (`withSigverify(true)`)
     const svm = new LiteSVM().withDefaultPrograms().withSigverify(true);
     svm.airdrop(address(trader.publicKey.toBase58()), lamports(1_000_000_000n));
     const { instruction: memoIx } = await buildCanonicalAuditMemoInstruction({
@@ -328,6 +331,123 @@ describe('Solana Devnet Executor, Agave LiteSVM Verification & Anti-Spoofing Gua
     expect(receipt.executedPrograms).toContain(LIVEEDGE_RISK_GUARD_PROGRAM_ID);
     expect(receipt.executedPrograms).toContain(DRIFT_V2_PROGRAM_ID);
     expect(receipt.devnetSlot).toBe(525_529_777);
+    // Rejects tampered decision exceeding fixedRiskCapUsdc by even +$0.01 (zero +0.01 tolerance)
+    await expect(
+      executeRiskGatedSolanaOrder({
+        impulse: bundle.impulse,
+        pythFeed: bundle.pythFeed,
+        book: bundle.orderbook,
+        decision: {
+          ...decision,
+          sizing: {
+            ...decision.sizing,
+            finalSizedNotionalUsdc: 666.67,
+            stopDistanceBps: 150,
+            impliedMaxLossUsdc: 10.01,
+          },
+        },
+        orderStyle: 'IOC_LIMIT',
+      })
+    ).rejects.toThrow(/Refusing to sign\/broadcast/);
+  });
+
+  it('verifies every flagship receipt in docs/DEVNET_EVIDENCE.json satisfies Ed25519 signature and on-chain Rust u128 bounds', async () => {
+    const evidencePath = path.resolve(__dirname, '../docs/DEVNET_EVIDENCE.json');
+    const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+    expect(evidence.executedDevnetReceipts.length).toBeGreaterThanOrEqual(2);
+    expect(evidence.agaveLiteSvmVerifiedProofs.length).toBeGreaterThanOrEqual(2);
+
+    for (const proof of evidence.agaveLiteSvmVerifiedProofs) {
+      expect(proof.scope).toBe('MEMO_AUDIT_ENVELOPE_ONLY');
+      expect(proof.instructionCount).toBe(3);
+      expect(proof.executedPrograms).toEqual([
+        COMPUTE_BUDGET_PROGRAM_ID,
+        SPL_MEMO_V2_PROGRAM_ID,
+      ]);
+    }
+
+    const bs58Decode = (str: string): Uint8Array => {
+      const alphabet =
+        '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      let num = 0n;
+      for (const ch of str) {
+        const idx = alphabet.indexOf(ch);
+        if (idx < 0) throw new Error(`Invalid base58 char: ${ch}`);
+        num = num * 58n + BigInt(idx);
+      }
+      let hex = num === 0n ? '' : num.toString(16);
+      if (hex.length % 2 === 1) hex = '0' + hex;
+      const raw = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < raw.length; i++) {
+        raw[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+      }
+      let leadingZeros = 0;
+      for (const ch of str) {
+        if (ch === '1') leadingZeros++;
+        else break;
+      }
+      const out = new Uint8Array(leadingZeros + raw.length);
+      out.set(raw, leadingZeros);
+      return out;
+    };
+
+    for (const rcpt of evidence.executedDevnetReceipts) {
+      const msgBytes = new Uint8Array(Buffer.from(rcpt.messageBase64, 'base64'));
+      const sigBytes = bs58Decode(rcpt.txSignature);
+      const pubBytes = new PublicKey(rcpt.traderPubkey).toBytes();
+      expect(
+        await verifyEd25519MessageSignature(pubBytes, msgBytes, sigBytes)
+      ).toBe(true);
+
+      const v0Msg = VersionedMessage.deserialize(msgBytes);
+      const guardIx = v0Msg.compiledInstructions.find(
+        (ix) =>
+          v0Msg.staticAccountKeys[ix.programIdIndex].toBase58() ===
+          LIVEEDGE_RISK_GUARD_PROGRAM_ID
+      );
+      expect(guardIx).toBeDefined();
+      expect(guardIx!.data.length).toBe(101);
+
+      const view = new DataView(
+        guardIx!.data.buffer,
+        guardIx!.data.byteOffset,
+        guardIx!.data.byteLength
+      );
+      const sizedNotionalE6 = view.getBigUint64(40, true);
+      const stopBps = BigInt(view.getUint16(48, true));
+      const refE6 = view.getBigUint64(50, true);
+      const limE6 = view.getBigUint64(58, true);
+      const orderMode = view.getUint8(66);
+      const tradeSide = view.getUint8(67);
+      const marketKind = view.getUint8(68);
+      const capE6 = BigInt(Math.round(rcpt.fixedRiskCapUsdc * 1_000_000));
+
+      expect([1, 2]).toContain(orderMode);
+      expect(sizedNotionalE6 * stopBps).toBeLessThanOrEqual(capE6 * 10_000n);
+
+      if (marketKind === 0) {
+        const oracleE6 = BigInt(Math.round(rcpt.pythPriceUsd * 1_000_000));
+        const absDev = refE6 >= oracleE6 ? refE6 - oracleE6 : oracleE6 - refE6;
+        expect(absDev * 10_000n).toBeLessThanOrEqual(oracleE6 * 150n);
+        if (tradeSide === 0) {
+          expect(limE6).toBeLessThanOrEqual((refE6 * 10_020n) / 10_000n);
+          expect(limE6).toBeLessThanOrEqual((oracleE6 * 10_170n) / 10_000n);
+        } else {
+          expect(limE6).toBeGreaterThanOrEqual((refE6 * 9_980n) / 10_000n);
+          expect(limE6).toBeGreaterThanOrEqual((oracleE6 * 9_830n) / 10_000n);
+        }
+      } else {
+        expect(refE6).toBeGreaterThanOrEqual(10_000n);
+        expect(refE6).toBeLessThanOrEqual(990_000n);
+        expect(limE6).toBeGreaterThanOrEqual(10_000n);
+        expect(limE6).toBeLessThanOrEqual(990_000n);
+        if (tradeSide === 0) {
+          expect(limE6).toBeLessThanOrEqual(refE6 + 15_000n);
+        } else {
+          expect(limE6 + 15_000n).toBeGreaterThanOrEqual(refE6);
+        }
+      }
+    }
   });
 
   it('executes Agent CLI scenarios and pulse subcommands cleanly with exit code 0', async () => {

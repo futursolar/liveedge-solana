@@ -33,6 +33,77 @@ function isPredictionVenue(book: VenueOrderbookSnapshot): boolean {
   );
 }
 
+function floorToDecimals(value: number, decimals: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const factor = 10 ** decimals;
+  return Math.floor(Number((value * factor).toPrecision(12))) / factor;
+}
+
+/**
+ * Computes conservative directional limit price (`e6` integer-aligned with `programs/liveedge_risk_guard/src/lib.rs`):
+ * - `LONG` / `YES`: rounds DOWN (floors) so `limit_price_e6 <= max_from_ref` never overflows on-chain truncation.
+ * - `SHORT`: rounds UP (ceils) so `limit_price_e6 >= min_from_ref` never underflows on-chain truncation.
+ */
+function computeConservativeLimitPrice(
+  refPrice: number,
+  maxSlipBps: number,
+  isShort: boolean,
+  isPm: boolean
+): number {
+  const refE6 = BigInt(Math.round(refPrice * 1_000_000));
+  if (refE6 <= 0n) return 0;
+
+  if (isPm) {
+    // 1 probability bps = $0.0001 = 100 in e6 units; match on-chain u16 integer bps floor
+    const allowedProbBps = BigInt(
+      Math.floor(Number(maxSlipBps.toPrecision(12)))
+    );
+    const deltaE6 = allowedProbBps * 100n;
+    if (isShort) {
+      const rawMinE6 = refE6 > deltaE6 ? refE6 - deltaE6 : 10_000n;
+      const clampedMinE6 =
+        rawMinE6 < 10_000n ? 10_000n : rawMinE6 > 990_000n ? 990_000n : rawMinE6;
+      const ceiled4E6 = ((clampedMinE6 + 99n) / 100n) * 100n;
+      const finalE6 =
+        ceiled4E6 <= refE6 || ceiled4E6 <= 10_000n
+          ? ceiled4E6 > 990_000n
+            ? 990_000n
+            : ceiled4E6
+          : clampedMinE6;
+      return Number(finalE6) / 1_000_000;
+    }
+    const rawMaxE6 = refE6 + deltaE6;
+    const clampedMaxE6 =
+      rawMaxE6 > 990_000n ? 990_000n : rawMaxE6 < 10_000n ? 10_000n : rawMaxE6;
+    const floored4E6 = (clampedMaxE6 / 100n) * 100n;
+    const finalE6 =
+      floored4E6 >= refE6 || floored4E6 >= 990_000n
+        ? floored4E6 < 10_000n
+          ? 10_000n
+          : floored4E6
+        : clampedMaxE6;
+    return Number(finalE6) / 1_000_000;
+  }
+
+  // Perp: align with on-chain `ref_e6 * (10_000 +- slip_bps) / 10_000`
+  const slipMilliBps = BigInt(
+    Math.floor(Number((maxSlipBps * 1_000).toPrecision(12)))
+  );
+  if (isShort) {
+    const factor =
+      slipMilliBps >= 10_000_000n ? 0n : 10_000_000n - slipMilliBps;
+    const minLimE6 = (refE6 * factor + 9_999_999n) / 10_000_000n;
+    const ceiled4E6 = ((minLimE6 + 99n) / 100n) * 100n;
+    const finalE6 = ceiled4E6 <= refE6 ? ceiled4E6 : minLimE6;
+    return Number(finalE6 > 0n ? finalE6 : 1n) / 1_000_000;
+  }
+
+  const maxLimE6 = (refE6 * (10_000_000n + slipMilliBps)) / 10_000_000n;
+  const floored4E6 = (maxLimE6 / 100n) * 100n;
+  const finalE6 = floored4E6 >= refE6 ? floored4E6 : maxLimE6;
+  return Number(finalE6) / 1_000_000;
+}
+
 /**
  * Pure Fixed-Loss Position Sizer ("以损定仓") supporting `LONG`, `SHORT`, and `YES`:
  * - For Solana Perpetuals: `rawNotional = fixedRiskCapUsdc / (stopDistanceBps / 10_000)`,
@@ -87,30 +158,35 @@ export function sizePositionByFixedLoss(
   }
 
   const isPm = isPredictionVenue(book);
-  const clampedRiskBudgetUsdc = Number(
-    Math.min(requestedRiskUsdc, config.fixedRiskCapUsdc).toFixed(2)
+  const clampedRiskBudgetUsdc = floorToDecimals(
+    Math.min(requestedRiskUsdc, config.fixedRiskCapUsdc),
+    2
   );
-  const effectiveStopBps = isPm ? 10_000 : stopDistanceBps;
+  const effectiveStopBps = isPm
+    ? 10_000
+    : Math.ceil(Number(stopDistanceBps.toPrecision(12)));
   const maxSlipBps = isPm
     ? Math.max(config.maxSlippageBps, 150)
     : config.maxSlippageBps;
 
-  const limitPrice = isPm
-    ? isShort
-      ? Number(Math.max(0.01, book.bestBid - maxSlipBps / 10_000).toFixed(4))
-      : Number(Math.min(0.99, book.bestAsk + maxSlipBps / 10_000).toFixed(4))
-    : isShort
-      ? Number((book.bestBid * (1 - maxSlipBps / 10_000)).toFixed(4))
-      : Number((book.bestAsk * (1 + maxSlipBps / 10_000)).toFixed(4));
-
-  const rawRiskSizedNotionalUsdc = Number(
-    ((clampedRiskBudgetUsdc * 10_000) / effectiveStopBps).toFixed(2)
+  const limitPrice = computeConservativeLimitPrice(
+    refPrice,
+    maxSlipBps,
+    isShort,
+    isPm
   );
+
+  // Strictly floor notional in exact e6 integer arithmetic so `notional_e6 * stop_bps <= cap_e6 * 10_000`
+  const budgetE6 = BigInt(Math.round(clampedRiskBudgetUsdc * 1_000_000));
+  const maxRawNotionalE6 = (budgetE6 * 10_000n) / BigInt(effectiveStopBps);
+  const rawRiskSizedNotionalUsdc = Number(maxRawNotionalE6 / 10_000n) / 100;
+
   const leverageCeilingUsdc = isPm
     ? clampedRiskBudgetUsdc
-    : Number((config.maxCollateralUsdc * config.maxLeverage).toFixed(2));
-  const leverageCappedNotionalUsdc = Number(
-    Math.min(rawRiskSizedNotionalUsdc, leverageCeilingUsdc).toFixed(2)
+    : floorToDecimals(config.maxCollateralUsdc * config.maxLeverage, 2);
+  const leverageCappedNotionalUsdc = floorToDecimals(
+    Math.min(rawRiskSizedNotionalUsdc, leverageCeilingUsdc),
+    2
   );
 
   const activeLevels = isShort ? book.bids : book.asks;
@@ -119,8 +195,9 @@ export function sizePositionByFixedLoss(
     limitPrice,
     direction
   );
-  const depthCappedNotionalUsdc = Number(
-    Math.min(leverageCappedNotionalUsdc, executableDepthUsdc).toFixed(2)
+  const depthCappedNotionalUsdc = floorToDecimals(
+    Math.min(leverageCappedNotionalUsdc, executableDepthUsdc),
+    2
   );
 
   const vwap = simulateOrderbookVwapFill(
@@ -134,12 +211,16 @@ export function sizePositionByFixedLoss(
   );
 
   const finalSizedNotionalUsdc =
-    depthCappedNotionalUsdc > 0 ? vwap.filledNotionalUsdc : 0;
+    depthCappedNotionalUsdc > 0
+      ? Math.min(depthCappedNotionalUsdc, vwap.filledNotionalUsdc)
+      : 0;
   const finalBaseQty =
     depthCappedNotionalUsdc > 0 ? vwap.filledBaseQty : 0;
-  const impliedMaxLossUsdc = Number(
-    ((finalSizedNotionalUsdc * effectiveStopBps) / 10_000).toFixed(2)
-  );
+
+  const finalNotionalE6 = BigInt(Math.round(finalSizedNotionalUsdc * 1_000_000));
+  const exactLossScaled = finalNotionalE6 * BigInt(effectiveStopBps);
+  const impliedMaxLossUsdc =
+    Number((exactLossScaled + 99_999_999n) / 100_000_000n) / 100;
   const effectiveLeverage = isPm
     ? 1.0
     : Number((finalSizedNotionalUsdc / config.maxCollateralUsdc).toFixed(2));
@@ -274,11 +355,20 @@ export function evaluateSolanaRiskGate(
     ? Math.max(config.maxSlippageBps, 150)
     : config.maxSlippageBps;
 
+  const onChainLossCapOk =
+    inputsFinite &&
+    sizing.stopDistanceBps >= 25 &&
+    BigInt(Math.round(sizing.finalSizedNotionalUsdc * 1_000_000)) *
+      BigInt(Math.round(sizing.stopDistanceBps)) <=
+      BigInt(Math.round(config.fixedRiskCapUsdc * 1_000_000)) * 10_000n;
+
   const riskCapLocked =
     inputsFinite &&
     sizing.fixedRiskCapUsdc > 0 &&
     sizing.fixedRiskCapUsdc <= config.fixedRiskCapUsdc &&
-    sizing.impliedMaxLossUsdc <= config.fixedRiskCapUsdc + 0.01;
+    sizing.impliedMaxLossUsdc <= sizing.fixedRiskCapUsdc &&
+    sizing.impliedMaxLossUsdc <= config.fixedRiskCapUsdc &&
+    onChainLossCapOk;
 
   const bookAgeMs = inputsFinite
     ? Math.max(0, nowMs - book.fetchedAtMs)
@@ -306,10 +396,29 @@ export function evaluateSolanaRiskGate(
     spreadBps <= maxAllowedSpreadBps;
   const depthOk =
     inputsFinite && availableDepthUsdc >= config.minExecutableDepthUsdc;
+  const onChainPythSlipOk = (() => {
+    if (!inputsFinite || isPm || pythFeed.priceUsd <= 0 || sizing.limitPrice <= 0) {
+      return true;
+    }
+    const oracleE6 = BigInt(Math.round(pythFeed.priceUsd * 1_000_000));
+    const refE6 = BigInt(
+      Math.round((isShort ? book.bestBid : book.bestAsk) * 1_000_000)
+    );
+    const limE6 = BigInt(Math.round(sizing.limitPrice * 1_000_000));
+    const absDev = refE6 >= oracleE6 ? refE6 - oracleE6 : oracleE6 - refE6;
+    if (absDev * 10_000n > oracleE6 * 150n) return false;
+    const totalOracleBps =
+      150n + BigInt(Math.floor(Number(maxAllowedSlippageBps.toPrecision(12))));
+    return isShort
+      ? limE6 >= (oracleE6 * (10_000n - totalOracleBps)) / 10_000n
+      : limE6 <= (oracleE6 * (10_000n + totalOracleBps)) / 10_000n;
+  })();
+
   const slippageOk =
     inputsFinite &&
     sizing.finalSizedNotionalUsdc > 0 &&
-    sizing.slippageBps <= maxAllowedSlippageBps;
+    sizing.slippageBps <= maxAllowedSlippageBps &&
+    onChainPythSlipOk;
   const edgeOk = inputsFinite && edgeBps >= minRequiredEdgeBps;
 
   const expectedValueUsdc =

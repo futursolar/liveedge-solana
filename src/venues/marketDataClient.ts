@@ -222,6 +222,12 @@ export function buildL2LadderAroundMid(
   return { bids, asks };
 }
 
+function floorToDecimals(value: number, decimals: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const factor = 10 ** decimals;
+  return Math.floor(Number((value * factor).toPrecision(12))) / factor;
+}
+
 export function computeExecutableDepthUsdc(
   levels: OrderbookLevel[],
   limitPrice: number,
@@ -245,7 +251,7 @@ export function computeExecutableDepthUsdc(
       }
     }
   }
-  return Number(total.toFixed(2));
+  return floorToDecimals(total, 2);
 }
 
 export interface VwapExecutionSim {
@@ -336,8 +342,11 @@ export function simulateOrderbookVwapFill(
       : 0;
 
   return {
-    filledNotionalUsdc: Number(filledUsdc.toFixed(2)),
-    filledBaseQty: Number(filledBase.toFixed(4)),
+    filledNotionalUsdc: Math.min(
+      floorToDecimals(targetNotionalUsdc, 2),
+      floorToDecimals(filledUsdc, 2)
+    ),
+    filledBaseQty: floorToDecimals(filledBase, 4),
     vwapPrice: Number(vwapPrice.toFixed(4)),
     slippageBps,
     fullyFilled: remainingUsdc <= 0.05,

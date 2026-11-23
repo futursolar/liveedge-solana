@@ -341,4 +341,96 @@ describe('Fixed-Loss Position Sizer & 8-Gate Fail-Closed Solana Risk Engine', ()
       globalThis.fetch = origFetch;
     }
   });
+
+  it('enforces strict integer-truncation parity with on-chain Rust verify_and_apply_guarded_impulse across LONG, SHORT, and fractional stops', () => {
+    const baseBundle = buildScenarioBundle('sol-perp-breakout');
+    const bookAt7318 = {
+      ...baseBundle.orderbook,
+      bestBid: 73.18,
+      bestAsk: 73.18,
+      midPrice: 73.18,
+      spread: 0,
+      spreadBps: 0,
+      bids: [{ price: 73.18, sizeBase: 50, notionalUsdc: 3659 }],
+      asks: [{ price: 73.18, sizeBase: 50, notionalUsdc: 3659 }],
+    };
+
+    // 1. Flagship regression: referencePrice = 73.18 (`73_180_000`), maxSlippageBps = 20
+    //    - Rust LONG `max_from_ref` = `73_180_000 * 10_020 / 10_000` = `73_326_360`
+    //    - Off-chain LONG MUST floor to `73.3263` (`73_326_300 <= 73_326_360`), NEVER `73.3264` (`73_326_400`)!
+    const long7318 = sizePositionByFixedLoss(
+      10.0,
+      125,
+      bookAt7318,
+      DEFAULT_SOLANA_RISK_CONFIG,
+      'LONG'
+    );
+    expect(long7318.limitPrice).toBe(73.3263);
+    expect(Math.round(long7318.limitPrice * 1_000_000)).toBeLessThanOrEqual(
+      73_326_360
+    );
+
+    //    - Rust SHORT `min_from_ref` = `73_180_000 * 9_980 / 10_000` = `73_033_640`
+    //    - Off-chain SHORT MUST ceil to `73.0337` (`73_033_700 >= 73_033_640`), NEVER `73.0336` (`73_033_600`)!
+    const short7318 = sizePositionByFixedLoss(
+      10.0,
+      125,
+      bookAt7318,
+      DEFAULT_SOLANA_RISK_CONFIG,
+      'SHORT'
+    );
+    expect(short7318.limitPrice).toBe(73.0337);
+    expect(Math.round(short7318.limitPrice * 1_000_000)).toBeGreaterThanOrEqual(
+      73_033_640
+    );
+
+    // 2. Non-terminating stopDistanceBps = 150 (`$10 / 1.5% = 666.6666...`)
+    //    - Off-chain MUST floor notional to `666.66` (`666_660_000 * 150 = 99_999_000_000 <= 100_000_000_000`), NEVER `666.67`!
+    const highLevCfg = { ...DEFAULT_SOLANA_RISK_CONFIG, maxLeverage: 10.0 };
+    const stop150 = sizePositionByFixedLoss(
+      10.0,
+      150,
+      bookAt7318,
+      highLevCfg,
+      'LONG'
+    );
+    expect(stop150.rawRiskSizedNotionalUsdc).toBe(666.66);
+    expect(stop150.finalSizedNotionalUsdc).toBe(666.66);
+    expect(stop150.impliedMaxLossUsdc).toBe(10.0);
+    expect(
+      BigInt(Math.round(stop150.finalSizedNotionalUsdc * 1_000_000)) * 150n
+    ).toBeLessThanOrEqual(100_000_000_000n);
+
+    // 3. Exhaustive matrix across prime/non-terminating stops and prices for both LONG & SHORT
+    for (const refPx of [0.02, 12.37, 73.18, 141.77, 2124.53, 91423.19]) {
+      const syntheticBook = {
+        ...bookAt7318,
+        bestBid: refPx,
+        bestAsk: refPx,
+        midPrice: refPx,
+        bids: [{ price: refPx, sizeBase: 100_000, notionalUsdc: 5_000_000 }],
+        asks: [{ price: refPx, sizeBase: 100_000, notionalUsdc: 5_000_000 }],
+      };
+      const refE6 = BigInt(Math.round(refPx * 1_000_000));
+      for (const stopBps of [33, 67, 133, 150, 175, 233, 333, 777, 1500, 9999]) {
+        for (const dir of ['LONG', 'SHORT'] as const) {
+          const s = sizePositionByFixedLoss(
+            10.0,
+            stopBps,
+            syntheticBook,
+            { ...DEFAULT_SOLANA_RISK_CONFIG, maxCollateralUsdc: 50_000, maxLeverage: 10 },
+            dir
+          );
+          const sizedE6 = BigInt(Math.round(s.finalSizedNotionalUsdc * 1_000_000));
+          const limE6 = BigInt(Math.round(s.limitPrice * 1_000_000));
+          expect(sizedE6 * BigInt(stopBps)).toBeLessThanOrEqual(100_000_000_000n);
+          if (dir === 'LONG') {
+            expect(limE6).toBeLessThanOrEqual((refE6 * 10_020n) / 10_000n);
+          } else {
+            expect(limE6).toBeGreaterThanOrEqual((refE6 * 9_980n) / 10_000n);
+          }
+        }
+      }
+    }
+  });
 });

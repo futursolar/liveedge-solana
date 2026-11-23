@@ -713,4 +713,137 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn enforces_exact_integer_truncation_boundaries_for_73_18_and_stop_150_bps() {
+        let mut policy = default_policy();
+        let market_key = pubkey!("8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W");
+        let market_data = build_drift_market(&market_key);
+        // Pyth SOL/USD = $73.11790000 (`7_311_790_000` at exp `-8`), conf = $0.0204 (`2.8 bps`)
+        let pyth_data = build_price_update_v2(1, 7_311_790_000, 2_040_000, -8, 1_795_460_000);
+
+        // 1. LONG boundary at reference_price_e6 = 73_180_000 (`max_from_ref` = 73_326_360):
+        //    - Rounded-up `73_326_400` ($73.3264) MUST revert with SlippageBoundExceeded
+        //    - Floored `73_326_300` ($73.3263) MUST pass
+        let bad_long = GuardedImpulseParams {
+            expected_pyth_feed_id: sample_sol_feed_id(),
+            sized_notional_usdc_e6: 800_000_000,
+            stop_distance_bps: 125,
+            reference_price_e6: 73_180_000,
+            limit_price_e6: 73_326_400,
+            order_mode: OrderMode::IocLimit,
+            trade_side: TradeSide::Long,
+            market_kind: MarketKind::Perp,
+            decision_digest: [2u8; 32],
+        };
+        assert!(verify_and_apply_guarded_impulse(
+            &mut policy,
+            &PYTH_SOLANA_RECEIVER_ID,
+            &pyth_data,
+            &market_key,
+            &DRIFT_V2_PROGRAM_ID,
+            &market_data,
+            525_536_200,
+            1_795_460_002,
+            &bad_long,
+        )
+        .is_err());
+
+        let good_long = GuardedImpulseParams {
+            limit_price_e6: 73_326_300,
+            ..bad_long.clone()
+        };
+        assert!(verify_and_apply_guarded_impulse(
+            &mut policy,
+            &PYTH_SOLANA_RECEIVER_ID,
+            &pyth_data,
+            &market_key,
+            &DRIFT_V2_PROGRAM_ID,
+            &market_data,
+            525_536_200,
+            1_795_460_002,
+            &good_long,
+        )
+        .is_ok());
+
+        // 2. SHORT boundary at reference_price_e6 = 73_180_000 (`min_from_ref` = 73_033_640):
+        //    - Rounded-down `73_033_600` ($73.0336) MUST revert with SlippageBoundExceeded
+        //    - Ceiled `73_033_700` ($73.0337) MUST pass
+        let bad_short = GuardedImpulseParams {
+            limit_price_e6: 73_033_600,
+            trade_side: TradeSide::Short,
+            ..bad_long.clone()
+        };
+        assert!(verify_and_apply_guarded_impulse(
+            &mut policy,
+            &PYTH_SOLANA_RECEIVER_ID,
+            &pyth_data,
+            &market_key,
+            &DRIFT_V2_PROGRAM_ID,
+            &market_data,
+            525_536_201,
+            1_795_460_003,
+            &bad_short,
+        )
+        .is_err());
+
+        let good_short = GuardedImpulseParams {
+            limit_price_e6: 73_033_700,
+            trade_side: TradeSide::Short,
+            ..bad_long.clone()
+        };
+        assert!(verify_and_apply_guarded_impulse(
+            &mut policy,
+            &PYTH_SOLANA_RECEIVER_ID,
+            &pyth_data,
+            &market_key,
+            &DRIFT_V2_PROGRAM_ID,
+            &market_data,
+            525_536_201,
+            1_795_460_003,
+            &good_short,
+        )
+        .is_ok());
+
+        // 3. Non-terminating stop_distance_bps = 150 (`$10 / 1.5% = 666.6666...`):
+        //    - Rounded-up `666_670_000` ($666.67 => 100_000_500_000 > 100_000_000_000) MUST revert
+        //    - Floored `666_660_000` ($666.66 => 99_999_000_000 <= 100_000_000_000) MUST pass
+        let bad_notional = GuardedImpulseParams {
+            sized_notional_usdc_e6: 666_670_000,
+            stop_distance_bps: 150,
+            limit_price_e6: 73_326_300,
+            ..bad_long.clone()
+        };
+        assert!(verify_and_apply_guarded_impulse(
+            &mut policy,
+            &PYTH_SOLANA_RECEIVER_ID,
+            &pyth_data,
+            &market_key,
+            &DRIFT_V2_PROGRAM_ID,
+            &market_data,
+            525_536_202,
+            1_795_460_004,
+            &bad_notional,
+        )
+        .is_err());
+
+        let good_notional = GuardedImpulseParams {
+            sized_notional_usdc_e6: 666_660_000,
+            stop_distance_bps: 150,
+            limit_price_e6: 73_326_300,
+            ..bad_long
+        };
+        assert!(verify_and_apply_guarded_impulse(
+            &mut policy,
+            &PYTH_SOLANA_RECEIVER_ID,
+            &pyth_data,
+            &market_key,
+            &DRIFT_V2_PROGRAM_ID,
+            &market_data,
+            525_536_202,
+            1_795_460_004,
+            &good_notional,
+        )
+        .is_ok());
+    }
 }

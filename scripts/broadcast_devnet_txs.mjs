@@ -36,7 +36,7 @@ if (confirmedCount > 0) {
 } else {
   console.log(
     `\nℹ️ Demo wallet (${ev.isolatedDemoWalletPubkey}) currently holds 0 Devnet SOL (public RPC requestAirdrop returns HTTP 410; faucet.solana.com requires human Turnstile).\n` +
-      `   4-program atomic V0 messages & Ed25519 signatures are ready for Explorer inspection, and Agave LiteSVM BPF proofs passed.\n` +
+      `   4-program atomic V0 messages & Ed25519 signatures are ready for Explorer inspection, and Agave LiteSVM SPL Memo v2 audit-envelope proofs passed.\n` +
       `   After funding 1 Devnet SOL via ${ev.faucetFundUrl}, re-run 'npm run devnet:broadcast' to record permanent L1 slot confirmations.`
   );
 }

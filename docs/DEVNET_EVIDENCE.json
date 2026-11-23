@@ -1,9 +1,9 @@
 {
-  "generatedAtIso": "2026-11-23T19:31:08.902Z",
+  "generatedAtIso": "2026-11-23T20:15:57.631Z",
   "cluster": "devnet",
   "rpcEndpoint": "https://api.devnet.solana.com",
   "solanaCoreVersion": "4.5.0-beta.0",
-  "observedDevnetSlot": 525536199,
+  "observedDevnetSlot": 525547375,
   "isolatedDemoWalletPubkey": "4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2",
   "demoWalletBalanceSol": 0,
   "faucetFundUrl": "https://faucet.solana.com/?walletAddress=4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2&amount=1&cluster=devnet",
@@ -19,10 +19,10 @@
       "emaPriceUsd": 73.563011,
       "exponent": -8,
       "publishTimeSec": 1795461882,
-      "ageMs": 386254,
+      "ageMs": 3074926,
       "postedSlot": 525534599,
-      "spotReferenceUsd": 72.905,
-      "spotDislocationBps": -29.11,
+      "spotReferenceUsd": 73.145,
+      "spotDislocationBps": 3.71,
       "source": "SOLANA_ONCHAIN_RECEIVER",
       "cluster": "devnet",
       "verificationLevel": "FULL"
@@ -38,10 +38,10 @@
       "emaPriceUsd": 61418.17231,
       "exponent": -8,
       "publishTimeSec": 1795420847,
-      "ageMs": 41421254,
+      "ageMs": 44109926,
       "postedSlot": 525363920,
-      "spotReferenceUsd": 61368.515,
-      "spotDislocationBps": -6.02,
+      "spotReferenceUsd": 61303.395,
+      "spotDislocationBps": -16.62,
       "source": "SOLANA_ONCHAIN_RECEIVER",
       "cluster": "devnet",
       "verificationLevel": "FULL"
@@ -57,10 +57,10 @@
       "emaPriceUsd": 1813.15222,
       "exponent": -8,
       "publishTimeSec": 1794920155,
-      "ageMs": 542113254,
+      "ageMs": 544801926,
       "postedSlot": 523275726,
-      "spotReferenceUsd": 1734.745,
-      "spotDislocationBps": -470.3,
+      "spotReferenceUsd": 1730.61,
+      "spotDislocationBps": -493.01,
       "source": "SOLANA_ONCHAIN_RECEIVER",
       "cluster": "devnet",
       "verificationLevel": "FULL"
@@ -97,7 +97,7 @@
   },
   "executedDevnetReceipts": [
     {
-      "receiptId": "sol-rcpt-mwtnvkzx",
+      "receiptId": "sol-rcpt-mwtph7mx",
       "scenarioId": "sol-perp-breakout",
       "marketSymbol": "SOL-PERP",
       "venue": "SOLANA_DRIFT_PERP",
@@ -110,7 +110,7 @@
       "sizedNotionalUsdc": 800,
       "sizedBaseQty": 10.9308,
       "impliedMaxLossUsdc": 10,
-      "limitPrice": 73.3264,
+      "limitPrice": 73.3263,
       "vwapFillPrice": 73.1875,
       "expectedValueUsdc": 4.67,
       "pythPriceUsd": 73.1179,
@@ -127,34 +127,34 @@
         "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
       ],
       "instructionCount": 5,
-      "decisionDigestHex": "72cf56dc29f7623e46115d00273a0f44826083aa06542a569d97b6d8cf55ffe8",
-      "txSignature": "3og2913Ekd3WJZzrpuBMRoSFi7oHYuxzTYTToSUGvUsJHWXQ6DhpWmrXnaE9LQ3YCE1QK6A1Ge2DpC132dm2n3jY",
-      "messageBase64": "gAEACQ0zstH65hOmwX1+VZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa/joZObwB9xBeu8gamlEHq3LaZuMqqSvkDUq1wkM++qfgfpGvKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAYNqmkUl/M95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt/1dayQwlU276eyWDJinopP+ITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1+FwLJA3uipzgdn7nObfFdD8VNdLtzEZ+K8S8ZDA4VvikDYiceTDtpx7UpBfc/oj+uGEGwhrIUjzR4ifH+lS/hVF+jDqO8PzwpZtqLbD3++NOrfaV8oCMqVOSgJk//w8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjaCPIf8fDPd3BoQ5lxJBoQ6u1S4LInD1WzMMCvAynko1BQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW0ACK8vAAAAAH0AYKNcBAAAAABA314EAAAAAAEAAHLPVtwp92I+RhFdACc6D0SCYIOqBlQqVp2XttjPVf/oBwcIAwAJCgsCKEWhXcp4fky5AQEAAYDFhosCAAAAQN9eBAAAAAAAAAAAAQAAAAAAAAAMAQC7A3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC1QRVJQIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfUEVSUCIsImRpciI6IkxPTkciLCJzdHlsZSI6IklPQ19MSU1JVCIsInJpc2tDYXBVc2RjIjoxMCwic3RvcEJwcyI6MTI1LCJub3Rpb25hbFVzZGMiOjgwMCwicXR5IjoxMC45MzA4LCJsaW1pdFByaWNlIjo3My4zMjY0LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjgsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjhVSmd4YWlReDVuVHJkRGdwaDVGaWFoTW16ZHV1TFRMZjVXbXNQZWdZQTZXIiwiZHJpZnRPcmFjbGUiOiIzbTZpNFJGV0VEdzJGdDR0RkhQSnRZZ21wUGUyMWs1Nk0zRkhlV1lyZ0dCeiIsImRpZ2VzdCI6IjcyY2Y1NmRjMjlmNzYyM2U0NjExNWQwMCJ9AA==",
+      "decisionDigestHex": "96ffdcc61dcf96e64099fceea31baea515ea4927a05f9b2a9c31a1f4cd0d960e",
+      "txSignature": "3uFwpaPAQMguy8uNR3T45o1nf7JXzSNUhoTqsK7DDEhGx9NVLcZqP8nvf76oDkewHNPEawtrWkjuNp2rNg84BQGC",
+      "messageBase64": "gAEACQ0zstH65hOmwX1+VZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa/joZObwB9xBeu8gamlEHq3LaZuMqqSvkDUq1wkM++qfgfpGvKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAYNqmkUl/M95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt/1dayQwlU276eyWDJinopP+ITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1+FwLJA3uipzgdn7nObfFdD8VNdLtzEZ+K8S8ZDA4VvikDYiceTDtpx7UpBfc/oj+uGEGwhrIUjzR4ifH+lS/hVF+jDqO8PzwpZtqLbD3++NOrfaV8oCMqVOSgJk//w8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjUQ3uSmpSV9uNiepuC8wtd9DAh3/C8P28Ma9f/JmxGYWBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW0ACK8vAAAAAH0AYKNcBAAAAADc3l4EAAAAAAEAAJb/3MYdz5bmQJn87qMbrqUV6kknoF+bKpwxofTNDZYOBwcIAwAJCgsCKEWhXcp4fky5AQEAAYDFhosCAAAA3N5eBAAAAAAAAAAAAQAAAAAAAAAMAQC7A3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC1QRVJQIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfUEVSUCIsImRpciI6IkxPTkciLCJzdHlsZSI6IklPQ19MSU1JVCIsInJpc2tDYXBVc2RjIjoxMCwic3RvcEJwcyI6MTI1LCJub3Rpb25hbFVzZGMiOjgwMCwicXR5IjoxMC45MzA4LCJsaW1pdFByaWNlIjo3My4zMjYzLCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjgsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjhVSmd4YWlReDVuVHJkRGdwaDVGaWFoTW16ZHV1TFRMZjVXbXNQZWdZQTZXIiwiZHJpZnRPcmFjbGUiOiIzbTZpNFJGV0VEdzJGdDR0RkhQSnRZZ21wUGUyMWs1Nk0zRkhlV1lyZ0dCeiIsImRpZ2VzdCI6Ijk2ZmZkY2M2MWRjZjk2ZTY0MDk5ZmNlZSJ9AA==",
       "broadcastStatus": "OFFLINE_ED25519_SIGNED",
       "rpcSimulationNote": "Public Devnet RPC returned \"InvalidAccountForFee\" because isolated demo fee-payer 4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2 holds 0 Devnet SOL (api.devnet.solana.com requestAirdrop is HTTP 410; faucet.solana.com requires human Turnstile). Full 4-program V0 message & Ed25519 signature are valid; fund 1 Devnet SOL to simulate/broadcast on public L1.",
-      "devnetSlot": 525536200,
+      "devnetSlot": 525547376,
       "computeUnitsConsumed": 0,
       "priorityFeeMicroLamports": 1200,
       "bpfLogs": [
         "[ED25519-VERIFIED] Signed 4-program atomic V0 message (5 instructions: ComputeBudget.., 7X5WrZSY.., dRiftyHA.., MemoSq4g..)",
-        "[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot 525536200 -> \"InvalidAccountForFee\" (0 SOL fee-payer prior to human faucet funding)"
+        "[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot 525547376 -> \"InvalidAccountForFee\" (0 SOL fee-payer prior to human faucet funding)"
       ],
       "ed25519Verified": true,
       "latencyMs": {
         "detectToOracleMs": 4,
         "riskGateMs": 2,
-        "txBuildSignMs": 107,
-        "solanaRpcConfirmMs": 139,
-        "totalEndToEndMs": 252
+        "txBuildSignMs": 79,
+        "solanaRpcConfirmMs": 138,
+        "totalEndToEndMs": 223
       },
-      "explorerTxUrl": "https://explorer.solana.com/tx/3og2913Ekd3WJZzrpuBMRoSFi7oHYuxzTYTToSUGvUsJHWXQ6DhpWmrXnaE9LQ3YCE1QK6A1Ge2DpC132dm2n3jY?cluster=devnet",
-      "explorerInspectorUrl": "https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%223og2913Ekd3WJZzrpuBMRoSFi7oHYuxzTYTToSUGvUsJHWXQ6DhpWmrXnaE9LQ3YCE1QK6A1Ge2DpC132dm2n3jY%22%5D&message=gAEACQ0zstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa%2FjoZObwB9xBeu8gamlEHq3LaZuMqqSvkDUq1wkM%2B%2BqfgfpGvKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAAYNqmkUl%2FM95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt%2F1dayQwlU276eyWDJinopP%2BITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1%2BFwLJA3uipzgdn7nObfFdD8VNdLtzEZ%2BK8S8ZDA4VvikDYiceTDtpx7UpBfc%2Foj%2BuGEGwhrIUjzR4ifH%2BlS%2FhVF%2BjDqO8PzwpZtqLbD3%2B%2BNOrfaV8oCMqVOSgJk%2F%2Fw8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjaCPIf8fDPd3BoQ5lxJBoQ6u1S4LInD1WzMMCvAynko1BQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW0ACK8vAAAAAH0AYKNcBAAAAABA314EAAAAAAEAAHLPVtwp92I%2BRhFdACc6D0SCYIOqBlQqVp2XttjPVf%2FoBwcIAwAJCgsCKEWhXcp4fky5AQEAAYDFhosCAAAAQN9eBAAAAAAAAAAAAQAAAAAAAAAMAQC7A3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC1QRVJQIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfUEVSUCIsImRpciI6IkxPTkciLCJzdHlsZSI6IklPQ19MSU1JVCIsInJpc2tDYXBVc2RjIjoxMCwic3RvcEJwcyI6MTI1LCJub3Rpb25hbFVzZGMiOjgwMCwicXR5IjoxMC45MzA4LCJsaW1pdFByaWNlIjo3My4zMjY0LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjgsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjhVSmd4YWlReDVuVHJkRGdwaDVGaWFoTW16ZHV1TFRMZjVXbXNQZWdZQTZXIiwiZHJpZnRPcmFjbGUiOiIzbTZpNFJGV0VEdzJGdDR0RkhQSnRZZ21wUGUyMWs1Nk0zRkhlV1lyZ0dCeiIsImRpZ2VzdCI6IjcyY2Y1NmRjMjlmNzYyM2U0NjExNWQwMCJ9AA%3D%3D",
+      "explorerTxUrl": "https://explorer.solana.com/tx/3uFwpaPAQMguy8uNR3T45o1nf7JXzSNUhoTqsK7DDEhGx9NVLcZqP8nvf76oDkewHNPEawtrWkjuNp2rNg84BQGC?cluster=devnet",
+      "explorerInspectorUrl": "https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%223uFwpaPAQMguy8uNR3T45o1nf7JXzSNUhoTqsK7DDEhGx9NVLcZqP8nvf76oDkewHNPEawtrWkjuNp2rNg84BQGC%22%5D&message=gAEACQ0zstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa%2FjoZObwB9xBeu8gamlEHq3LaZuMqqSvkDUq1wkM%2B%2BqfgfpGvKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAAYNqmkUl%2FM95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt%2F1dayQwlU276eyWDJinopP%2BITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1%2BFwLJA3uipzgdn7nObfFdD8VNdLtzEZ%2BK8S8ZDA4VvikDYiceTDtpx7UpBfc%2Foj%2BuGEGwhrIUjzR4ifH%2BlS%2FhVF%2BjDqO8PzwpZtqLbD3%2B%2BNOrfaV8oCMqVOSgJk%2F%2Fw8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjUQ3uSmpSV9uNiepuC8wtd9DAh3%2FC8P28Ma9f%2FJmxGYWBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW0ACK8vAAAAAH0AYKNcBAAAAADc3l4EAAAAAAEAAJb%2F3MYdz5bmQJn87qMbrqUV6kknoF%2BbKpwxofTNDZYOBwcIAwAJCgsCKEWhXcp4fky5AQEAAYDFhosCAAAA3N5eBAAAAAAAAAAAAQAAAAAAAAAMAQC7A3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC1QRVJQIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfUEVSUCIsImRpciI6IkxPTkciLCJzdHlsZSI6IklPQ19MSU1JVCIsInJpc2tDYXBVc2RjIjoxMCwic3RvcEJwcyI6MTI1LCJub3Rpb25hbFVzZGMiOjgwMCwicXR5IjoxMC45MzA4LCJsaW1pdFByaWNlIjo3My4zMjYzLCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjgsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjhVSmd4YWlReDVuVHJkRGdwaDVGaWFoTW16ZHV1TFRMZjVXbXNQZWdZQTZXIiwiZHJpZnRPcmFjbGUiOiIzbTZpNFJGV0VEdzJGdDR0RkhQSnRZZ21wUGUyMWs1Nk0zRkhlV1lyZ0dCeiIsImRpZ2VzdCI6Ijk2ZmZkY2M2MWRjZjk2ZTY0MDk5ZmNlZSJ9AA%3D%3D",
       "explorerOracleAccountUrl": "https://explorer.solana.com/address/7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE?cluster=devnet",
       "explorerMarketPdaUrl": "https://explorer.solana.com/address/8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W?cluster=devnet",
-      "createdAtIso": "2026-11-23T19:31:08.685Z"
+      "createdAtIso": "2026-11-23T20:15:57.418Z"
     },
     {
-      "receiptId": "sol-rcpt-mwtnvl5u",
+      "receiptId": "sol-rcpt-mwtph7sr",
       "scenarioId": "pm-clutch-repricing",
       "marketSymbol": "SOL-80-DEC-BET",
       "venue": "SOLANA_DRIFT_BET_PM",
@@ -185,40 +185,46 @@
       ],
       "instructionCount": 5,
       "decisionDigestHex": "fb5ebaa724b067e7bd987192dbaabeab1ed9718c16f2d106431e92d64cce3205",
-      "txSignature": "3TWYbkVWSdDGNEAggxWYyRP8YitwLj9hapgNkecwgpNnYEsoGD8bVMe89RkEun1e38fTeuRBkx1dNdatUTBjsS94",
-      "messageBase64": "gAEACQ0zstH65hOmwX1+VZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa/joZOZdKdXhJhPNbUGAfRpYHuq7PgFK/b74smnwaEJOYvrb/KQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAYNqmkUl/M95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt/1dayQwlU276eyWDJinopP+ITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1+FwLJA3uipzgdn7nObfFdD8VNdLtzEZ+K8S8ZDA4VviSBJ6vhKXcltfwowKDc4P12md85m3szMmZT2G5mXgDnVF+jDqO8PzwpZtqLbD3++NOrfaV8oCMqVOSgJk//w8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjTs1iViULH1YdYWThgVj+Q8hzBV/cH7SisuhuXkrD4tdBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW2AlpgAAAAAABAnYD0IAAAAAAD4dwgAAAAAAAIAAfteuqcksGfnvZhxktuqvqse2XGMFvLRBkMektZMzjIFBwcIAwAJCgsCKEWhXcp4fky5AQEAAaDiyU8EAAAA+HcIAAAAAAAaAAABAAAAAAAAAAAMAQDBA3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC04MC1ERUMtQkVUIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfQkVUX1BNIiwiZGlyIjoiWUVTIiwic3R5bGUiOiJQT1NUX09OTFkiLCJyaXNrQ2FwVXNkYyI6MTAsInN0b3BCcHMiOjEwMDAwLCJub3Rpb25hbFVzZGMiOjEwLCJxdHkiOjE4LjUxODUsImxpbWl0UHJpY2UiOjAuNTU1LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjcsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjdyVVN0MVBYWG4yUHA0Wk5EY1pxWkdFZ0tTR3B4cWJSeWIyVzZyRzFEdHQ2IiwiZHJpZnRPcmFjbGUiOiIzVFZ1TG1FR0JSZlZncm1GUnRZVGhlY3pYYWFvUkJ3Y0h3MXlpYlpIU2VOQSIsImRpZ2VzdCI6ImZiNWViYWE3MjRiMDY3ZTdiZDk4NzE5MiJ9AA==",
+      "txSignature": "5ohQiN5ChVxWWpZYoAUHAAGMaqn4HiHaHwP7JXQyMr7AwQ1sAjoKM6zdeuBUzAhjtfrcMkTugcY7qUQXXiw3W3vR",
+      "messageBase64": "gAEACQ0zstH65hOmwX1+VZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa/joZOZdKdXhJhPNbUGAfRpYHuq7PgFK/b74smnwaEJOYvrb/KQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAYNqmkUl/M95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt/1dayQwlU276eyWDJinopP+ITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1+FwLJA3uipzgdn7nObfFdD8VNdLtzEZ+K8S8ZDA4VviSBJ6vhKXcltfwowKDc4P12md85m3szMmZT2G5mXgDnVF+jDqO8PzwpZtqLbD3++NOrfaV8oCMqVOSgJk//w8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjWk53YmrbelOLImUW99a4z9DFadPT6JF6pzNXf+W0DdoBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW2AlpgAAAAAABAnYD0IAAAAAAD4dwgAAAAAAAIAAfteuqcksGfnvZhxktuqvqse2XGMFvLRBkMektZMzjIFBwcIAwAJCgsCKEWhXcp4fky5AQEAAaDiyU8EAAAA+HcIAAAAAAAaAAABAAAAAAAAAAAMAQDBA3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC04MC1ERUMtQkVUIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfQkVUX1BNIiwiZGlyIjoiWUVTIiwic3R5bGUiOiJQT1NUX09OTFkiLCJyaXNrQ2FwVXNkYyI6MTAsInN0b3BCcHMiOjEwMDAwLCJub3Rpb25hbFVzZGMiOjEwLCJxdHkiOjE4LjUxODUsImxpbWl0UHJpY2UiOjAuNTU1LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjcsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjdyVVN0MVBYWG4yUHA0Wk5EY1pxWkdFZ0tTR3B4cWJSeWIyVzZyRzFEdHQ2IiwiZHJpZnRPcmFjbGUiOiIzVFZ1TG1FR0JSZlZncm1GUnRZVGhlY3pYYWFvUkJ3Y0h3MXlpYlpIU2VOQSIsImRpZ2VzdCI6ImZiNWViYWE3MjRiMDY3ZTdiZDk4NzE5MiJ9AA==",
       "broadcastStatus": "OFFLINE_ED25519_SIGNED",
       "rpcSimulationNote": "Public Devnet RPC returned \"InvalidAccountForFee\" because isolated demo fee-payer 4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2 holds 0 Devnet SOL (api.devnet.solana.com requestAirdrop is HTTP 410; faucet.solana.com requires human Turnstile). Full 4-program V0 message & Ed25519 signature are valid; fund 1 Devnet SOL to simulate/broadcast on public L1.",
-      "devnetSlot": 525536201,
+      "devnetSlot": 525547377,
       "computeUnitsConsumed": 0,
       "priorityFeeMicroLamports": 1200,
       "bpfLogs": [
         "[ED25519-VERIFIED] Signed 4-program atomic V0 message (5 instructions: ComputeBudget.., 7X5WrZSY.., dRiftyHA.., MemoSq4g..)",
-        "[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot 525536201 -> \"InvalidAccountForFee\" (0 SOL fee-payer prior to human faucet funding)"
+        "[DEVNET-RPC-NOTE] simulateTransaction(sigVerify:true) @ slot 525547377 -> \"InvalidAccountForFee\" (0 SOL fee-payer prior to human faucet funding)"
       ],
       "ed25519Verified": true,
       "latencyMs": {
         "detectToOracleMs": 4,
         "riskGateMs": 2,
-        "txBuildSignMs": 70,
+        "txBuildSignMs": 68,
         "solanaRpcConfirmMs": 132,
-        "totalEndToEndMs": 208
+        "totalEndToEndMs": 206
       },
-      "explorerTxUrl": "https://explorer.solana.com/tx/3TWYbkVWSdDGNEAggxWYyRP8YitwLj9hapgNkecwgpNnYEsoGD8bVMe89RkEun1e38fTeuRBkx1dNdatUTBjsS94?cluster=devnet",
-      "explorerInspectorUrl": "https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%223TWYbkVWSdDGNEAggxWYyRP8YitwLj9hapgNkecwgpNnYEsoGD8bVMe89RkEun1e38fTeuRBkx1dNdatUTBjsS94%22%5D&message=gAEACQ0zstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa%2FjoZOZdKdXhJhPNbUGAfRpYHuq7PgFK%2Fb74smnwaEJOYvrb%2FKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAAYNqmkUl%2FM95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt%2F1dayQwlU276eyWDJinopP%2BITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1%2BFwLJA3uipzgdn7nObfFdD8VNdLtzEZ%2BK8S8ZDA4VviSBJ6vhKXcltfwowKDc4P12md85m3szMmZT2G5mXgDnVF%2BjDqO8PzwpZtqLbD3%2B%2BNOrfaV8oCMqVOSgJk%2F%2Fw8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjTs1iViULH1YdYWThgVj%2BQ8hzBV%2FcH7SisuhuXkrD4tdBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW2AlpgAAAAAABAnYD0IAAAAAAD4dwgAAAAAAAIAAfteuqcksGfnvZhxktuqvqse2XGMFvLRBkMektZMzjIFBwcIAwAJCgsCKEWhXcp4fky5AQEAAaDiyU8EAAAA%2BHcIAAAAAAAaAAABAAAAAAAAAAAMAQDBA3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC04MC1ERUMtQkVUIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfQkVUX1BNIiwiZGlyIjoiWUVTIiwic3R5bGUiOiJQT1NUX09OTFkiLCJyaXNrQ2FwVXNkYyI6MTAsInN0b3BCcHMiOjEwMDAwLCJub3Rpb25hbFVzZGMiOjEwLCJxdHkiOjE4LjUxODUsImxpbWl0UHJpY2UiOjAuNTU1LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjcsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjdyVVN0MVBYWG4yUHA0Wk5EY1pxWkdFZ0tTR3B4cWJSeWIyVzZyRzFEdHQ2IiwiZHJpZnRPcmFjbGUiOiIzVFZ1TG1FR0JSZlZncm1GUnRZVGhlY3pYYWFvUkJ3Y0h3MXlpYlpIU2VOQSIsImRpZ2VzdCI6ImZiNWViYWE3MjRiMDY3ZTdiZDk4NzE5MiJ9AA%3D%3D",
+      "explorerTxUrl": "https://explorer.solana.com/tx/5ohQiN5ChVxWWpZYoAUHAAGMaqn4HiHaHwP7JXQyMr7AwQ1sAjoKM6zdeuBUzAhjtfrcMkTugcY7qUQXXiw3W3vR?cluster=devnet",
+      "explorerInspectorUrl": "https://explorer.solana.com/tx/inspector?cluster=devnet&signatures=%5B%225ohQiN5ChVxWWpZYoAUHAAGMaqn4HiHaHwP7JXQyMr7AwQ1sAjoKM6zdeuBUzAhjtfrcMkTugcY7qUQXXiw3W3vR%22%5D&message=gAEACQ0zstH65hOmwX1%2BVZgjdt6iBr7glyM16OmjmXLLfGJXSXsCcR0G1JZRITrfUJ6bXSOykKS3lbdL3pDPcYa%2FjoZOZdKdXhJhPNbUGAfRpYHuq7PgFK%2Fb74smnwaEJOYvrb%2FKQJ3taCIy4gfyx5fPNfcbXd0oiqP1r350xZOHpeFMhAMGRm%2FlIRcy%2F%2BytunLDm%2Be8jOW7xfcSayxDmzpAAAAAYNqmkUl%2FM95bRtLqLn6GW2XfCwDVg6MYHvpFNdXo3yxgMUcENA3t3zcf1CRyFI8kjp0abRpesqw6zYt%2F1dayQwlU276eyWDJinopP%2BITNpZv4YDRUa5LgXlWH4mFSlP2Sj7vSwPIKnFZnqB6Fu5Lz23OMTV9hGCyrBvUw6mGDJ1%2BFwLJA3uipzgdn7nObfFdD8VNdLtzEZ%2BK8S8ZDA4VviSBJ6vhKXcltfwowKDc4P12md85m3szMmZT2G5mXgDnVF%2BjDqO8PzwpZtqLbD3%2B%2BNOrfaV8oCMqVOSgJk%2F%2Fw8IFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjWk53YmrbelOLImUW99a4z9DFadPT6JF6pzNXf%2BW0DdoBQQABQKAqQMABAAJA7AEAAAAAAAABQQAAQYCZYiZZOA5RF8d7w2Lb9os66QdoV1AldHaOSoNL47Qxse8D0z6yMKAtW2AlpgAAAAAABAnYD0IAAAAAAD4dwgAAAAAAAIAAfteuqcksGfnvZhxktuqvqse2XGMFvLRBkMektZMzjIFBwcIAwAJCgsCKEWhXcp4fky5AQEAAaDiyU8EAAAA%2BHcIAAAAAAAaAAABAAAAAAAAAAAMAQDBA3sidiI6ImxpdmVlZGdlLXNvbGFuYS92MSIsIm1hcmtldCI6IlNPTC04MC1ERUMtQkVUIiwidmVudWUiOiJTT0xBTkFfRFJJRlRfQkVUX1BNIiwiZGlyIjoiWUVTIiwic3R5bGUiOiJQT1NUX09OTFkiLCJyaXNrQ2FwVXNkYyI6MTAsInN0b3BCcHMiOjEwMDAwLCJub3Rpb25hbFVzZGMiOjEwLCJxdHkiOjE4LjUxODUsImxpbWl0UHJpY2UiOjAuNTU1LCJweXRoUHJpY2UiOjczLjExNzksInB5dGhDb25mQnBzIjoyLjcsInB5dGhBY2MiOiI3VVZpbWZmeHI5b3cxdVhZeHNyNExIQWNWNThtTHpobXdhZUt2SjFwakxpRSIsIm1hcmtldFBkYSI6IjdyVVN0MVBYWG4yUHA0Wk5EY1pxWkdFZ0tTR3B4cWJSeWIyVzZyRzFEdHQ2IiwiZHJpZnRPcmFjbGUiOiIzVFZ1TG1FR0JSZlZncm1GUnRZVGhlY3pYYWFvUkJ3Y0h3MXlpYlpIU2VOQSIsImRpZ2VzdCI6ImZiNWViYWE3MjRiMDY3ZTdiZDk4NzE5MiJ9AA%3D%3D",
       "explorerOracleAccountUrl": "https://explorer.solana.com/address/7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE?cluster=devnet",
       "explorerMarketPdaUrl": "https://explorer.solana.com/address/7rUSt1PXXn2Pp4ZNDcZqZGEgKSGpxqbRyb2W6rG1Dtt6?cluster=devnet",
-      "createdAtIso": "2026-11-23T19:31:08.898Z"
+      "createdAtIso": "2026-11-23T20:15:57.627Z"
     }
   ],
   "agaveLiteSvmVerifiedProofs": [
     {
       "scenarioId": "sol-perp-breakout",
+      "scope": "MEMO_AUDIT_ENVELOPE_ONLY",
+      "executedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+      ],
+      "instructionCount": 3,
       "marketSymbol": "SOL-PERP",
       "orderStyle": "IOC_LIMIT",
       "signerPubkey": "4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2",
-      "txSignature": "3tWhCetbm253EipMNzuNDbEk4TvuZYHdPQSUVoJmwUxrUeiuiW9V1jxxEUFgcM6iwttPxjGertHmDxKVQxz7i9Uc",
-      "decisionDigestHex": "72cf56dc29f7623e46115d00273a0f44826083aa06542a569d97b6d8cf55ffe8",
+      "txSignature": "5GkyqHZnFJsq8FAWqvtMTyXGfLDm88d8V257x6FbBtDL8Tpa4i7svEmZscjeteiGRMNLLkyqE5VnoS96XerEsTpt",
+      "decisionDigestHex": "96ffdcc61dcf96e64099fceea31baea515ea4927a05f9b2a9c31a1f4cd0d960e",
       "sigVerify": true,
       "computeUnitsConsumed": 1169,
       "logs": [
@@ -230,13 +236,19 @@
         "Program log: Signed by:",
         "Program log: 4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2",
         "Program log: Memo (len 443)",
-        "Program log: {\"v\":\"liveedge-solana/v1\",\"market\":\"SOL-PERP\",\"venue\":\"SOLANA_DRIFT_PERP\",\"dir\":\"LONG\",\"style\":\"IOC_LIMIT\",\"riskCapUsdc\":10,\"stopBps\":125,\"notionalUsdc\":800,\"qty\":10.9308,\"limitPrice\":73.3264,\"pythPrice\":73.1179,\"pythConfBps\":2.8,\"pythAcc\":\"7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE\",\"marketPda\":\"8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W\",\"driftOracle\":\"3m6i4RFWEDw2Ft4tFHPJtYgmpPe21k56M3FHeWYrgGBz\",\"digest\":\"72cf56dc29f7623e46115d00\"}",
+        "Program log: {\"v\":\"liveedge-solana/v1\",\"market\":\"SOL-PERP\",\"venue\":\"SOLANA_DRIFT_PERP\",\"dir\":\"LONG\",\"style\":\"IOC_LIMIT\",\"riskCapUsdc\":10,\"stopBps\":125,\"notionalUsdc\":800,\"qty\":10.9308,\"limitPrice\":73.3263,\"pythPrice\":73.1179,\"pythConfBps\":2.8,\"pythAcc\":\"7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE\",\"marketPda\":\"8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W\",\"driftOracle\":\"3m6i4RFWEDw2Ft4tFHPJtYgmpPe21k56M3FHeWYrgGBz\",\"digest\":\"96ffdcc61dcf96e64099fcee\"}",
         "Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr consumed 869 of 199700 compute units",
         "Program MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr success"
       ]
     },
     {
       "scenarioId": "pm-clutch-repricing",
+      "scope": "MEMO_AUDIT_ENVELOPE_ONLY",
+      "executedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+      ],
+      "instructionCount": 3,
       "marketSymbol": "SOL-80-DEC-BET",
       "orderStyle": "POST_ONLY",
       "signerPubkey": "4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2",
