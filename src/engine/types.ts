@@ -196,6 +196,15 @@ export interface LatencyWaterfallMs {
   totalEndToEndMs: number;
 }
 
+export interface SignedAtomicV0Bundle {
+  txSignature: string;
+  messageBase64: string;
+  executedPrograms: string[];
+  instructionCount: number;
+  ed25519Verified: boolean;
+  explorerInspectorUrl: string;
+}
+
 export interface SolanaExecutionReceipt {
   receiptId: string;
   scenarioId: ScenarioId;
@@ -225,6 +234,7 @@ export interface SolanaExecutionReceipt {
   decisionDigestHex: string;
   txSignature: string;
   messageBase64: string;
+  atomicFourProgramBundle?: SignedAtomicV0Bundle;
   broadcastStatus: SolanaBroadcastStatus;
   rpcSimulationNote?: string;
   devnetSlot: number;

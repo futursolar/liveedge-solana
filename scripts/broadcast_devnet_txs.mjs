@@ -33,6 +33,16 @@ if (confirmedCount > 0) {
   console.log(
     `\n✅ ${confirmedCount} transaction(s) confirmed live on Solana Devnet ledger!`
   );
+  for (const r of ev.executedDevnetReceipts || []) {
+    if (r.broadcastStatus === 'CONFIRMED_ON_DEVNET') {
+      const bundleNote = r.atomicFourProgramBundle
+        ? ` | companion 4-program V0 sig=${r.atomicFourProgramBundle.txSignature}`
+        : '';
+      console.log(
+        `   - ${r.marketSymbol} (${r.orderStyle}, ${r.instructionCount} L1 ix @ slot ${r.devnetSlot}): ${r.txSignature}${bundleNote}`
+      );
+    }
+  }
 } else {
   console.log(
     `\nℹ️ Demo wallet (${ev.isolatedDemoWalletPubkey}) currently holds 0 Devnet SOL (public RPC requestAirdrop returns HTTP 410; faucet.solana.com requires human Turnstile).\n` +

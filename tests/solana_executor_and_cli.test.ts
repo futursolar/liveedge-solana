@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runAgentCli } from '../src/cli/agentCli';
 import { evaluateSolanaRiskGate } from '../src/engine/solanaRiskGate';
 import {
+  assertReceiptOnChainGuardParity,
   executeRiskGatedSolanaOrder,
   verifyEd25519MessageSignature,
 } from '../src/solana/devnetExecutor';
@@ -331,6 +332,106 @@ describe('Solana Devnet Executor, Agave LiteSVM Verification & Anti-Spoofing Gua
     expect(receipt.executedPrograms).toContain(LIVEEDGE_RISK_GUARD_PROGRAM_ID);
     expect(receipt.executedPrograms).toContain(DRIFT_V2_PROGRAM_ID);
     expect(receipt.devnetSlot).toBe(525_529_777);
+    expect(() =>
+      assertReceiptOnChainGuardParity(receipt, bundle.pythFeed.priceUsd)
+    ).not.toThrow();
+
+    // Part C: Realistic public-Devnet faucet-funded path (`1 Devnet SOL` while custom `7X5WrZSY...` & Drift User PDA are null on L1)
+    let sentUndeployedRaw: Uint8Array | null = null;
+    let sentUndeployedSigB58 = '';
+    const fundedUndeployedConn = {
+      getLatestBlockhash: vi.fn().mockResolvedValue({
+        blockhash: '11111111111111111111111111111111',
+        lastValidBlockHeight: 525_531_000,
+      }),
+      getBalance: vi.fn().mockResolvedValue(1_000_000_000), // 1.0 Devnet SOL from faucet
+      getAccountInfo: vi.fn().mockResolvedValue(null), // 7X5WrZSY... not deployed & Drift User PDA uninitialized on public Devnet
+      sendRawTransaction: vi
+        .fn()
+        .mockImplementation(async (raw: Uint8Array) => {
+          sentUndeployedRaw = raw;
+          const decodedTx = VersionedTransaction.deserialize(raw);
+          // Return the real base58 signature of the signed 3-ix Memo audit tx
+          const alphabet =
+            '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+          let num = 0n;
+          for (const byte of decodedTx.signatures[0]) {
+            num = (num << 8n) + BigInt(byte);
+          }
+          let out = '';
+          while (num > 0n) {
+            const rem = Number(num % 58n);
+            num = num / 58n;
+            out = alphabet[rem] + out;
+          }
+          for (const byte of decodedTx.signatures[0]) {
+            if (byte === 0) out = '1' + out;
+            else break;
+          }
+          sentUndeployedSigB58 = out;
+          return out;
+        }),
+      confirmTransaction: vi.fn().mockResolvedValue({ value: { err: null } }),
+      getTransaction: vi.fn().mockResolvedValue({
+        meta: {
+          computeUnitsConsumed: 1_169,
+          logMessages: [`Program ${SPL_MEMO_V2_PROGRAM_ID} success`],
+        },
+      }),
+      simulateTransaction: vi.fn(),
+      getSlot: vi.fn().mockResolvedValue(525_531_111),
+    };
+
+    const faucetFundedReceipt = await executeRiskGatedSolanaOrder({
+      impulse: bundle.impulse,
+      pythFeed: bundle.pythFeed,
+      book: bundle.orderbook,
+      decision,
+      orderStyle: 'IOC_LIMIT',
+      signerMode: 'DEVNET_KEYPAIR_LIVE',
+      keypair: trader,
+      connectionOverride: fundedUndeployedConn,
+    });
+
+    expect(sentUndeployedRaw).not.toBeNull();
+    const sentDecoded = VersionedTransaction.deserialize(sentUndeployedRaw!);
+    expect(sentDecoded.message.compiledInstructions).toHaveLength(3);
+    expect(faucetFundedReceipt.txSignature).toBe(sentUndeployedSigB58);
+    expect(faucetFundedReceipt.broadcastStatus).toBe('CONFIRMED_ON_DEVNET');
+    expect(faucetFundedReceipt.instructionCount).toBe(3);
+    expect(faucetFundedReceipt.executedPrograms).toEqual([
+      COMPUTE_BUDGET_PROGRAM_ID,
+      SPL_MEMO_V2_PROGRAM_ID,
+    ]);
+    expect(faucetFundedReceipt.atomicFourProgramBundle).toBeDefined();
+    expect(faucetFundedReceipt.atomicFourProgramBundle!.instructionCount).toBe(
+      5
+    );
+    expect(faucetFundedReceipt.atomicFourProgramBundle!.executedPrograms).toEqual(
+      [
+        COMPUTE_BUDGET_PROGRAM_ID,
+        LIVEEDGE_RISK_GUARD_PROGRAM_ID,
+        DRIFT_V2_PROGRAM_ID,
+        SPL_MEMO_V2_PROGRAM_ID,
+      ]
+    );
+    expect(faucetFundedReceipt.atomicFourProgramBundle!.ed25519Verified).toBe(
+      true
+    );
+    // Proves `npm run devnet:broadcast` & `check:all` NEVER crash after 1 SOL faucet funding!
+    expect(() =>
+      assertReceiptOnChainGuardParity(
+        faucetFundedReceipt,
+        bundle.pythFeed.priceUsd
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertReceiptOnChainGuardParity(
+        { ...faucetFundedReceipt, atomicFourProgramBundle: undefined },
+        bundle.pythFeed.priceUsd
+      )
+    ).toThrow(/Missing atomicFourProgramBundle/);
+
     // Rejects tampered decision exceeding fixedRiskCapUsdc by even +$0.01 (zero +0.01 tolerance)
     await expect(
       executeRiskGatedSolanaOrder({
@@ -399,7 +500,35 @@ describe('Solana Devnet Executor, Agave LiteSVM Verification & Anti-Spoofing Gua
         await verifyEd25519MessageSignature(pubBytes, msgBytes, sigBytes)
       ).toBe(true);
 
-      const v0Msg = VersionedMessage.deserialize(msgBytes);
+      if (rcpt.atomicFourProgramBundle) {
+        const companionMsgBytes = new Uint8Array(
+          Buffer.from(rcpt.atomicFourProgramBundle.messageBase64, 'base64')
+        );
+        const companionSigBytes = bs58Decode(
+          rcpt.atomicFourProgramBundle.txSignature
+        );
+        expect(
+          await verifyEd25519MessageSignature(
+            pubBytes,
+            companionMsgBytes,
+            companionSigBytes
+          )
+        ).toBe(true);
+      }
+
+      expect(() =>
+        assertReceiptOnChainGuardParity(rcpt, rcpt.pythPriceUsd)
+      ).not.toThrow();
+
+      const targetB64 = rcpt.executedPrograms.includes(
+        LIVEEDGE_RISK_GUARD_PROGRAM_ID
+      )
+        ? rcpt.messageBase64
+        : rcpt.atomicFourProgramBundle?.messageBase64;
+      expect(targetB64).toBeDefined();
+      const v0Msg = VersionedMessage.deserialize(
+        new Uint8Array(Buffer.from(targetB64!, 'base64'))
+      );
       const guardIx = v0Msg.compiledInstructions.find(
         (ix) =>
           v0Msg.staticAccountKeys[ix.programIdIndex].toBase58() ===

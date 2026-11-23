@@ -19,7 +19,6 @@ import {
   Connection,
   Keypair,
   TransactionMessage,
-  VersionedMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
 import { address, getTransactionDecoder, lamports } from '@solana/kit';
@@ -56,12 +55,15 @@ const { buildScenarioBundle, fetchLiveDriftPerpMarkets } = await import(
 const { evaluateSolanaRiskGate } = await import(
   pathToFileURL(path.join(ROOT, 'dist-cli/modules/engine/solanaRiskGate.js')).href
 );
-const { executeRiskGatedSolanaOrder, DEFAULT_SOLANA_DEVNET_RPC } = await import(
+const {
+  executeRiskGatedSolanaOrder,
+  assertReceiptOnChainGuardParity,
+  DEFAULT_SOLANA_DEVNET_RPC,
+} = await import(
   pathToFileURL(path.join(ROOT, 'dist-cli/modules/solana/devnetExecutor.js')).href
 );
 const {
   COMPUTE_BUDGET_PROGRAM_ID,
-  LIVEEDGE_RISK_GUARD_PROGRAM_ID,
   SPL_MEMO_V2_PROGRAM_ID,
   buildCanonicalAuditMemoInstruction,
   buildSetComputeUnitLimitInstruction,
@@ -72,77 +74,6 @@ const {
     path.join(ROOT, 'dist-cli/modules/solana/driftInstructionBuilder.js')
   ).href
 );
-
-function assertOnChainGuardParity(receipt, pythPriceUsd) {
-  const msgBytes = Buffer.from(receipt.messageBase64, 'base64');
-  const msg = VersionedMessage.deserialize(msgBytes);
-  const guardIx = msg.compiledInstructions.find(
-    (ix) =>
-      msg.staticAccountKeys[ix.programIdIndex].toBase58() ===
-      LIVEEDGE_RISK_GUARD_PROGRAM_ID
-  );
-  if (!guardIx || guardIx.data.length !== 101) {
-    throw new Error(
-      `Missing 101-byte liveedge_risk_guard instruction in ${receipt.scenarioId}`
-    );
-  }
-  const view = new DataView(
-    guardIx.data.buffer,
-    guardIx.data.byteOffset,
-    guardIx.data.byteLength
-  );
-  const sizedNotionalE6 = view.getBigUint64(40, true);
-  const stopBps = BigInt(view.getUint16(48, true));
-  const refE6 = view.getBigUint64(50, true);
-  const limE6 = view.getBigUint64(58, true);
-  const orderMode = view.getUint8(66);
-  const tradeSide = view.getUint8(67);
-  const marketKind = view.getUint8(68);
-  const capE6 = BigInt(Math.round(receipt.fixedRiskCapUsdc * 1_000_000));
-
-  if (orderMode !== 1 && orderMode !== 2) {
-    throw new Error(`Invalid OrderMode enum ${orderMode} in ${receipt.scenarioId}`);
-  }
-  if (sizedNotionalE6 * stopBps > capE6 * 10_000n) {
-    throw new Error(
-      `On-chain FixedRiskCapExceeded in ${receipt.scenarioId}: ${sizedNotionalE6} * ${stopBps} > ${capE6 * 10_000n}`
-    );
-  }
-  if (marketKind === 0) {
-    const oracleE6 = BigInt(Math.round(pythPriceUsd * 1_000_000));
-    const absDev = refE6 >= oracleE6 ? refE6 - oracleE6 : oracleE6 - refE6;
-    if (absDev * 10_000n > oracleE6 * 150n) {
-      throw new Error(`On-chain OraclePriceDeviationExceeded in ${receipt.scenarioId}`);
-    }
-    if (tradeSide === 0) {
-      const maxFromRef = (refE6 * 10_020n) / 10_000n;
-      const maxFromPyth = (oracleE6 * 10_170n) / 10_000n;
-      if (limE6 > maxFromRef || limE6 > maxFromPyth) {
-        throw new Error(
-          `On-chain LONG SlippageBoundExceeded in ${receipt.scenarioId}: lim=${limE6} > maxFromRef=${maxFromRef}`
-        );
-      }
-    } else {
-      const minFromRef = (refE6 * 9_980n) / 10_000n;
-      const minFromPyth = (oracleE6 * 9_830n) / 10_000n;
-      if (limE6 < minFromRef || limE6 < minFromPyth) {
-        throw new Error(
-          `On-chain SHORT SlippageBoundExceeded in ${receipt.scenarioId}: lim=${limE6} < minFromRef=${minFromRef}`
-        );
-      }
-    }
-  } else {
-    if (refE6 < 10_000n || refE6 > 990_000n || limE6 < 10_000n || limE6 > 990_000n) {
-      throw new Error(`BinaryPrediction limit out of [0.01, 0.99] in ${receipt.scenarioId}`);
-    }
-    if (tradeSide === 0 && limE6 > refE6 + 15_000n) {
-      throw new Error(`BinaryPrediction LONG SlippageBoundExceeded in ${receipt.scenarioId}`);
-    }
-    if (tradeSide === 1 && limE6 + 15_000n < refE6) {
-      throw new Error(`BinaryPrediction SHORT SlippageBoundExceeded in ${receipt.scenarioId}`);
-    }
-  }
-}
 
 function loadDemoKeypair() {
   const extPath = process.env.LIVEEDGE_DEVNET_KEYPAIR_PATH;
@@ -205,7 +136,7 @@ for (const [scenarioId, style] of [
     signerMode: 'DEVNET_KEYPAIR_LIVE',
     devnetRpcUrl: rpcUrl,
   });
-  assertOnChainGuardParity(receipt, bundle.pythFeed.priceUsd);
+  assertReceiptOnChainGuardParity(receipt, bundle.pythFeed.priceUsd);
   executedReceipts.push(receipt);
 
   // Execute standalone 3-instruction ComputeBudget + SPL Memo v2 audit-envelope V0 tx in Agave LiteSVM (`sigVerify: true`)
@@ -296,7 +227,11 @@ console.log(
   `  Demo Pubkey: ${evidenceDoc.isolatedDemoWalletPubkey} (${evidenceDoc.demoWalletBalanceSol} Devnet SOL)`
 );
 for (const r of executedReceipts) {
+  const companionNote = r.atomicFourProgramBundle
+    ? ` | companion4ProgSig=${r.atomicFourProgramBundle.txSignature}`
+    : '';
   console.log(
-    `  [${r.broadcastStatus}] ${r.marketSymbol} (${r.orderStyle}, ${r.executedPrograms.length} programs / ${r.instructionCount} ix) -> sig=${r.txSignature}`
+    `  [${r.broadcastStatus}] ${r.marketSymbol} (${r.orderStyle}, ${r.executedPrograms.length} programs / ${r.instructionCount} ix) -> sig=${r.txSignature}${companionNote}`
   );
 }
+process.exit(0);

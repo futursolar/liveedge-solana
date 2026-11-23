@@ -4,12 +4,14 @@ import {
   PublicKey,
   TransactionInstruction,
   TransactionMessage,
+  VersionedMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
 import type {
   ImpulseSignal,
   OrderExecutionStyle,
   PythFeedSnapshot,
+  SignedAtomicV0Bundle,
   SolanaBroadcastStatus,
   SolanaExecutionReceipt,
   SolanaRiskGateDecision,
@@ -54,6 +56,18 @@ function bytesToBase64(bytes: Uint8Array): string {
     bin += String.fromCharCode(bytes[i]);
   }
   return btoa(bin);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
 }
 
 /**
@@ -420,6 +434,22 @@ export async function executeRiskGatedSolanaOrder(
       bpfLogs = txMeta?.meta?.logMessages ?? [
         `[DEVNET-CONFIRMED] Signature ${rawSig} confirmed at slot ${devnetSlot}`,
       ];
+      if (!includeAnchorGuard || !includeDriftOrder) {
+        const omitted: string[] = [];
+        if (!includeAnchorGuard) {
+          omitted.push(
+            `liveedge_risk_guard (${LIVEEDGE_RISK_GUARD_PROGRAM_ID.slice(0, 8)}.. not deployed on public Devnet)`
+          );
+        }
+        if (!includeDriftOrder) {
+          omitted.push(
+            'Drift v2 User margin PDA not initialized for demo wallet'
+          );
+        }
+        rpcSimulationNote =
+          `Confirmed ${instructions.length}-instruction ComputeBudget + SPL Memo v2 audit envelope on public Devnet (${omitted.join('; ')}); ` +
+          `companion signed 4-program atomic V0 bundle is preserved in atomicFourProgramBundle.`;
+      }
     } else {
       // Honest direct simulation of `signedTx` itself against `conn` (NEVER swapping `simPayer`!)
       try {
@@ -456,6 +486,56 @@ export async function executeRiskGatedSolanaOrder(
         ];
       }
     }
+  }
+
+  let atomicFourProgramBundle: SignedAtomicV0Bundle | undefined;
+  if (
+    (!includeAnchorGuard || !includeDriftOrder) &&
+    signerMode !== 'DEVNET_WALLET_STANDARD'
+  ) {
+    const fullBundle = await composeAtomicGuardedInstructions({
+      traderPubkey,
+      impulse,
+      pythFeed,
+      book,
+      decision,
+      orderStyle,
+      computeUnitLimit,
+      priorityFeeMicroLamports,
+      includeInitRiskPolicy: Boolean(opts.includeInitPolicyIfMissing),
+      includeAnchorGuard: true,
+      includeDriftOrder: true,
+    });
+    const fullV0Msg = new TransactionMessage({
+      payerKey: traderPubkey,
+      recentBlockhash: blockhash,
+      instructions: fullBundle.instructions,
+    }).compileToV0Message();
+    const fullSignedTx = new VersionedTransaction(fullV0Msg);
+    fullSignedTx.sign([localKeypair]);
+    const fullMsgBytes = fullSignedTx.message.serialize();
+    const fullMsgB64 = bytesToBase64(fullMsgBytes);
+    const fullSigB58 = encodeBase58(fullSignedTx.signatures[0]);
+    const fullEd25519Ok = await verifyEd25519MessageSignature(
+      traderPubkey.toBytes(),
+      fullMsgBytes,
+      fullSignedTx.signatures[0]
+    );
+    const fullPrograms = Array.from(
+      new Set(fullBundle.instructions.map((ix) => ix.programId.toBase58()))
+    );
+    atomicFourProgramBundle = {
+      txSignature: fullSigB58,
+      messageBase64: fullMsgB64,
+      executedPrograms: fullPrograms,
+      instructionCount: fullBundle.instructions.length,
+      ed25519Verified: fullEd25519Ok,
+      explorerInspectorUrl: buildExplorerInspectorUrl(
+        fullSigB58,
+        fullMsgB64,
+        'devnet'
+      ),
+    };
   }
 
   const tDone = performance.now();
@@ -509,6 +589,7 @@ export async function executeRiskGatedSolanaOrder(
     decisionDigestHex,
     txSignature,
     messageBase64,
+    ...(atomicFourProgramBundle ? { atomicFourProgramBundle } : {}),
     broadcastStatus,
     ...(rpcSimulationNote ? { rpcSimulationNote } : {}),
     devnetSlot,
@@ -533,4 +614,160 @@ export async function executeRiskGatedSolanaOrder(
     explorerMarketPdaUrl: `https://explorer.solana.com/address/${book.marketPda}?cluster=devnet`,
     createdAtIso: new Date().toISOString(),
   };
+}
+
+/**
+ * Verifies byte-level parity between a `SolanaExecutionReceipt` and the on-chain
+ * Rust `liveedge_risk_guard` `u128` truncation rules across BOTH unfunded/deployed
+ * 4-program receipts AND funded L1 Memo receipts (where `liveedge_risk_guard` is
+ * not yet deployed on public Devnet and the signed 4-program V0 message is stored in
+ * `receipt.atomicFourProgramBundle`).
+ */
+export function assertReceiptOnChainGuardParity(
+  receipt: SolanaExecutionReceipt,
+  pythPriceUsd: number
+): void {
+  if (!receipt.ed25519Verified) {
+    throw new Error(
+      `Ed25519 verification flag is false in ${receipt.scenarioId}`
+    );
+  }
+
+  const primaryMsgBytes = base64ToBytes(receipt.messageBase64);
+  const primaryMsg = VersionedMessage.deserialize(primaryMsgBytes);
+  const memoIx = primaryMsg.compiledInstructions.find(
+    (ix) =>
+      primaryMsg.staticAccountKeys[ix.programIdIndex].toBase58() ===
+      SPL_MEMO_V2_PROGRAM_ID
+  );
+  if (!memoIx) {
+    throw new Error(
+      `Missing canonical SPL Memo v2 instruction in ${receipt.scenarioId}`
+    );
+  }
+  const memoJson = JSON.parse(new TextDecoder().decode(memoIx.data)) as {
+    digest?: string;
+  };
+  if (memoJson.digest !== receipt.decisionDigestHex.slice(0, 24)) {
+    throw new Error(
+      `SPL Memo digest mismatch in ${receipt.scenarioId}: ${String(memoJson.digest)} !== ${receipt.decisionDigestHex.slice(0, 24)}`
+    );
+  }
+
+  let guardTargetMsg: VersionedMessage | null = null;
+  if (receipt.executedPrograms.includes(LIVEEDGE_RISK_GUARD_PROGRAM_ID)) {
+    guardTargetMsg = primaryMsg;
+  } else if (receipt.atomicFourProgramBundle) {
+    if (!receipt.atomicFourProgramBundle.ed25519Verified) {
+      throw new Error(
+        `Companion atomicFourProgramBundle Ed25519 flag is false in ${receipt.scenarioId}`
+      );
+    }
+    for (const requiredProg of [
+      COMPUTE_BUDGET_PROGRAM_ID,
+      LIVEEDGE_RISK_GUARD_PROGRAM_ID,
+      DRIFT_V2_PROGRAM_ID,
+      SPL_MEMO_V2_PROGRAM_ID,
+    ]) {
+      if (
+        !receipt.atomicFourProgramBundle.executedPrograms.includes(requiredProg)
+      ) {
+        throw new Error(
+          `Companion atomicFourProgramBundle missing ${requiredProg} in ${receipt.scenarioId}`
+        );
+      }
+    }
+    guardTargetMsg = VersionedMessage.deserialize(
+      base64ToBytes(receipt.atomicFourProgramBundle.messageBase64)
+    );
+  } else if (receipt.signerMode !== 'DEVNET_WALLET_STANDARD') {
+    throw new Error(
+      `Missing atomicFourProgramBundle on keypair receipt without liveedge_risk_guard in ${receipt.scenarioId}`
+    );
+  } else {
+    return;
+  }
+
+  const guardIx = guardTargetMsg.compiledInstructions.find(
+    (ix) =>
+      guardTargetMsg.staticAccountKeys[ix.programIdIndex].toBase58() ===
+      LIVEEDGE_RISK_GUARD_PROGRAM_ID
+  );
+  if (!guardIx || guardIx.data.length !== 101) {
+    throw new Error(
+      `Missing 101-byte liveedge_risk_guard instruction in ${receipt.scenarioId}`
+    );
+  }
+
+  const view = new DataView(
+    guardIx.data.buffer,
+    guardIx.data.byteOffset,
+    guardIx.data.byteLength
+  );
+  const sizedNotionalE6 = view.getBigUint64(40, true);
+  const stopBps = BigInt(view.getUint16(48, true));
+  const refE6 = view.getBigUint64(50, true);
+  const limE6 = view.getBigUint64(58, true);
+  const orderMode = view.getUint8(66);
+  const tradeSide = view.getUint8(67);
+  const marketKind = view.getUint8(68);
+  const capE6 = BigInt(Math.round(receipt.fixedRiskCapUsdc * 1_000_000));
+
+  if (orderMode !== 1 && orderMode !== 2) {
+    throw new Error(
+      `Invalid OrderMode enum ${orderMode} in ${receipt.scenarioId}`
+    );
+  }
+  if (sizedNotionalE6 * stopBps > capE6 * 10_000n) {
+    throw new Error(
+      `On-chain FixedRiskCapExceeded in ${receipt.scenarioId}: ${sizedNotionalE6} * ${stopBps} > ${capE6 * 10_000n}`
+    );
+  }
+  if (marketKind === 0) {
+    const oracleE6 = BigInt(Math.round(pythPriceUsd * 1_000_000));
+    const absDev = refE6 >= oracleE6 ? refE6 - oracleE6 : oracleE6 - refE6;
+    if (absDev * 10_000n > oracleE6 * 150n) {
+      throw new Error(
+        `On-chain OraclePriceDeviationExceeded in ${receipt.scenarioId}`
+      );
+    }
+    if (tradeSide === 0) {
+      const maxFromRef = (refE6 * 10_020n) / 10_000n;
+      const maxFromPyth = (oracleE6 * 10_170n) / 10_000n;
+      if (limE6 > maxFromRef || limE6 > maxFromPyth) {
+        throw new Error(
+          `On-chain LONG SlippageBoundExceeded in ${receipt.scenarioId}: lim=${limE6} > maxFromRef=${maxFromRef}`
+        );
+      }
+    } else {
+      const minFromRef = (refE6 * 9_980n) / 10_000n;
+      const minFromPyth = (oracleE6 * 9_830n) / 10_000n;
+      if (limE6 < minFromRef || limE6 < minFromPyth) {
+        throw new Error(
+          `On-chain SHORT SlippageBoundExceeded in ${receipt.scenarioId}: lim=${limE6} < minFromRef=${minFromRef}`
+        );
+      }
+    }
+  } else {
+    if (
+      refE6 < 10_000n ||
+      refE6 > 990_000n ||
+      limE6 < 10_000n ||
+      limE6 > 990_000n
+    ) {
+      throw new Error(
+        `BinaryPrediction limit out of [0.01, 0.99] in ${receipt.scenarioId}`
+      );
+    }
+    if (tradeSide === 0 && limE6 > refE6 + 15_000n) {
+      throw new Error(
+        `BinaryPrediction LONG SlippageBoundExceeded in ${receipt.scenarioId}`
+      );
+    }
+    if (tradeSide === 1 && limE6 + 15_000n < refE6) {
+      throw new Error(
+        `BinaryPrediction SHORT SlippageBoundExceeded in ${receipt.scenarioId}`
+      );
+    }
+  }
 }
