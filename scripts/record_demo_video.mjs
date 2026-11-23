@@ -25,9 +25,16 @@ function findChromiumExecutable() {
   ) {
     return process.env.CHROMIUM_EXECUTABLE_PATH;
   }
+  const ancestorPlaywrightDirs = [];
+  let curDir = ROOT;
+  while (curDir && curDir !== path.dirname(curDir)) {
+    ancestorPlaywrightDirs.push(path.join(curDir, '.cache', 'ms-playwright'));
+    curDir = path.dirname(curDir);
+  }
   const searchRoots = [
     process.env.PLAYWRIGHT_BROWSERS_PATH,
     path.join(os.homedir(), '.cache', 'ms-playwright'),
+    ...ancestorPlaywrightDirs,
   ].filter(Boolean);
 
   for (const cacheDir of searchRoots) {

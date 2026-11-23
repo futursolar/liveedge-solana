@@ -25,9 +25,16 @@ function findChromiumExecutable() {
   ) {
     return process.env.CHROMIUM_EXECUTABLE_PATH;
   }
+  const ancestorPlaywrightDirs = [];
+  let curDir = ROOT;
+  while (curDir && curDir !== path.dirname(curDir)) {
+    ancestorPlaywrightDirs.push(path.join(curDir, '.cache', 'ms-playwright'));
+    curDir = path.dirname(curDir);
+  }
   const searchRoots = [
     process.env.PLAYWRIGHT_BROWSERS_PATH,
     path.join(os.homedir(), '.cache', 'ms-playwright'),
+    ...ancestorPlaywrightDirs,
   ].filter(Boolean);
 
   for (const cacheDir of searchRoots) {
@@ -213,9 +220,16 @@ async function runPlaywrightSmokeE2E() {
 }
 
 function findCargoExecutable() {
+  const ancestorCargoBins = [];
+  let curDir = ROOT;
+  while (curDir && curDir !== path.dirname(curDir)) {
+    ancestorCargoBins.push(path.join(curDir, '.cargo', 'bin', 'cargo'));
+    curDir = path.dirname(curDir);
+  }
   const candidates = [
     process.env.CARGO,
     path.join(os.homedir(), '.cargo', 'bin', 'cargo'),
+    ...ancestorCargoBins,
     '/usr/bin/cargo',
     '/usr/local/bin/cargo',
   ].filter(Boolean);
@@ -227,11 +241,15 @@ function findCargoExecutable() {
 
 async function main() {
   const cargoBin = findCargoExecutable();
+  const cargoEnv = path.isAbsolute(cargoBin)
+    ? { PATH: `${path.dirname(cargoBin)}:${process.env.PATH || ''}` }
+    : {};
   runStep(
     'Rust / Anchor Workspace Check (idl-build)',
     cargoBin,
     ['check', '--workspace', '--features', 'liveedge-risk-guard/idl-build'],
     {
+      ...cargoEnv,
       ANCHOR_IDL_BUILD_PROGRAM_PATH: path.join(
         ROOT,
         'programs',
@@ -239,10 +257,12 @@ async function main() {
       ),
     }
   );
-  runStep('Rust / Anchor On-Chain Guard Unit Tests', cargoBin, [
-    'test',
-    '--workspace',
-  ]);
+  runStep(
+    'Rust / Anchor On-Chain Guard Unit Tests',
+    cargoBin,
+    ['test', '--workspace'],
+    cargoEnv
+  );
   runStep('TypeScript Strict Check', 'npm', ['run', 'typecheck']);
   runStep('ESLint Static Analysis', 'npm', ['run', 'lint']);
   runStep('Vitest Automated Test Suite', 'npm', ['run', 'test']);
