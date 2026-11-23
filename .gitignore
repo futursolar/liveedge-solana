@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-cli/
+demo/frames/
+demo/*.wav
+.env
+.env.*
+*.pem
+*.key
+*keypair*.json
+.secrets/
+.DS_Store
+coverage/

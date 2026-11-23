@@ -1,0 +1,52 @@
+name: Deploy LiveEdge Solana Terminal to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies & build production bundle
+        run: |
+          npm ci
+          npm run build
+          mkdir -p dist/demo dist/docs
+          cp -f demo/liveedge-solana-demo.mp4 dist/demo/liveedge-solana-demo.mp4
+          cp -f demo/preview-terminal.jpg dist/demo/preview-terminal.jpg
+          cp -f docs/DEVNET_EVIDENCE.json dist/docs/DEVNET_EVIDENCE.json
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "./dist"
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

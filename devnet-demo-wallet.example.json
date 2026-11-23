@@ -1,0 +1,4 @@
+{
+  "_comment": "Template placeholder for Anchor.toml local testing only. Never commit real secret keys. Pass LIVEEDGE_DEVNET_KEYPAIR_PATH outside the repository.",
+  "publicKey": "4UoweFYtgkgr6G3TF9MniWdfvjyiWLzSjdu4qL4pTLP2"
+}

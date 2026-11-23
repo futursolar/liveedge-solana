@@ -1,0 +1,20 @@
+[package]
+name = "liveedge-risk-guard"
+version = "0.1.0"
+description = "Atomic On-Chain Pyth Confidence/Staleness & Fixed-Loss Position Sizing Guard for Solana Perps & Prediction Markets"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "liveedge_risk_guard"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"
